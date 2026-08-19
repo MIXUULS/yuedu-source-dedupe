@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material3 深色配色 -->
+    <color name="md_theme_primary">#D0BCFF</color>
+    <color name="md_theme_on_primary">#381E72</color>
+    <color name="md_theme_primary_container">#4F378B</color>
+    <color name="md_theme_secondary">#CCC2DC</color>
+    <color name="md_theme_background">#141218</color>
+    <color name="md_theme_surface">#141218</color>
+    <color name="md_theme_surface_variant">#49454F</color>
+    <color name="md_theme_on_surface">#E6E1E5</color>
+    <color name="md_theme_outline">#938F99</color>
+    <color name="md_theme_error">#F2B8B5</color>
+    <color name="md_theme_success">#81C995</color>
+    <color name="ledger_paper">#4F378B</color>
+    <color name="ledger_rule">#49454F</color>
+    <color name="ledger_ink">#E6E1E5</color>
+    <color name="ledger_muted">#938F99</color>
+    <color name="stat_ok_ink">#81C995</color>
+    <color name="stat_fail_ink">#F2B8B5</color>
+    <color name="stat_timeout_ink">#CCC2DC</color>
+    <color name="kind_novel_ink">#D0BCFF</color>
+    <color name="kind_comic_ink">#D0BCFF</color>
+    <color name="kind_video_ink">#D0BCFF</color>
+    <color name="kind_audio_ink">#D0BCFF</color>
+    <color name="kind_file_ink">#D0BCFF</color>
+</resources>
