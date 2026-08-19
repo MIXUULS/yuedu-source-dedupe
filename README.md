@@ -172,7 +172,15 @@ release 使用独立的 `keystore/release.keystore` 签名（仓库不包含、�
 keytool -genkeypair -v -keystore keystore/release.keystore -alias yuedu -keyalg RSA -keysize 2048 -validity 10000 -storepass <你的密码> -keypass <你的密码> -dname "CN=YueduDedupe,O=You,C=CN"
 ```
 
-并修改 `app/build.gradle.kts` 中 `releaseKey` 的 `storePassword` / `keyPassword` 为你设置的密码，然后：
+并在项目根目录的 `local.properties`（该文件已被 `.gitignore` 排除，不会提交）中配置你的密码：
+
+```properties
+releaseStorePassword=你的密码
+releaseKeyPassword=你的密码
+releaseKeyAlias=yuedu
+```
+
+然后构建：
 
 ```bash
 ./gradlew :app:assembleRelease
