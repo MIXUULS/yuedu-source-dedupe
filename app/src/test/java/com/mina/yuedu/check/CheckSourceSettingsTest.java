@@ -7,8 +7,8 @@ import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class CheckSourceSettingsTest {
-  @Test public void concurrencyIsNormalizedToOneThroughOneHundred() {
-    assertEquals(100, CheckSourceSettings.MAX_CONCURRENCY);
+  @Test public void concurrencyIsNormalizedToOneThroughFiveHundred() {
+    assertEquals(500, CheckSourceSettings.MAX_CONCURRENCY);
 
     CheckSourceSettings belowMinimum = new CheckSourceSettings();
     belowMinimum.concurrency = 0;
@@ -16,14 +16,14 @@ public class CheckSourceSettingsTest {
     assertEquals(1, belowMinimum.concurrency);
 
     CheckSourceSettings atMaximum = new CheckSourceSettings();
-    atMaximum.concurrency = 100;
+    atMaximum.concurrency = 500;
     atMaximum.normalize();
-    assertEquals(100, atMaximum.concurrency);
+    assertEquals(500, atMaximum.concurrency);
 
     CheckSourceSettings aboveMaximum = new CheckSourceSettings();
-    aboveMaximum.concurrency = 101;
+    aboveMaximum.concurrency = 501;
     aboveMaximum.normalize();
-    assertEquals(100, aboveMaximum.concurrency);
+    assertEquals(500, aboveMaximum.concurrency);
   }
 
   @Test public void defaultConcurrencyRemainsEight() {

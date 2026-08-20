@@ -8,20 +8,30 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.GZIPInputStream;
 public final class FetchManager {
   public static final class QueueState {
-    private final Deque<String> pending; private final int limit, total;
+    private final Deque<List<String>> domainBuckets; private final int limit, total;
+    private List<String> currentBucket; private int bucketIndex;
     private int inFlight, completed, succeeded, failed, sources; private boolean cancelled, keepLoaded;
     private String currentUrl; private long downloadedBytes, totalBytes = -1;
     private long lastSpeedTime, lastSpeedBytes; private long speedBytesPerSec;
-    public QueueState(List<String> urls, int limit){
-      if(limit<1||limit>8) throw new IllegalArgumentException("concurrency 1..8");
-      pending=new ArrayDeque<>(urls); this.limit=limit; total=urls.size();
+    public QueueState(Deque<List<String>> buckets, int limit){
+      this.domainBuckets=buckets;
+      this.limit=limit;
+      int t=0; for(List<String> b:buckets) t+=b.size();
+      total=t;
     }
-    public synchronized String takeNext(){ if(cancelled||inFlight>=limit||pending.isEmpty()) return null; inFlight++; return pending.removeFirst(); }
+    public synchronized String takeNext(){
+      if(cancelled||inFlight>=limit) return null;
+      while(currentBucket==null||bucketIndex>=currentBucket.size()){
+        if(domainBuckets.isEmpty()){ currentBucket=null; return null; }
+        currentBucket=domainBuckets.removeFirst(); bucketIndex=0;
+      }
+      inFlight++; return currentBucket.get(bucketIndex++);
+    }
     public synchronized void complete(boolean ok, int count){ if(inFlight>0) inFlight--; completed++; if(ok) succeeded++; else failed++; sources+=Math.max(0,count); }
-    public synchronized void cancel(boolean keep){ cancelled=true; keepLoaded=keep; pending.clear(); }
+    public synchronized void cancel(boolean keep){ cancelled=true; keepLoaded=keep; domainBuckets.clear(); currentBucket=null; }
     public synchronized boolean shouldKeepLoaded(){ return keepLoaded; }
     public synchronized boolean isCancelled(){ return cancelled; }
-    public synchronized boolean isDone(){ return (pending.isEmpty()&&inFlight==0) || (cancelled&&inFlight==0); }
+    public synchronized boolean isDone(){ return completed>=total||(cancelled&&inFlight==0); }
     public synchronized void setDownloading(String url, long total){ currentUrl=url; downloadedBytes=0; totalBytes=total; }
     public synchronized void addDownloaded(long n){ if(currentUrl!=null) downloadedBytes+=n; }
     public synchronized void clearDownloading(){ currentUrl=null; downloadedBytes=0; totalBytes=-1; }
@@ -59,7 +69,14 @@ public final class FetchManager {
   private final int maxBytes = 64 * 1024 * 1024; // 万级大合集书源包可达 30-50MB，上限放宽到 64MB
   public synchronized void start(List<String> urls, int concurrency, FetchListener l){
     if(state!=null && !state.isDone()) throw new IllegalStateException("task running");
-    state=new QueueState(urls, concurrency); listener=l; listener.onProgress(state.progress());
+    // 按域名分组：同一域名串行（worker 独占一个域名桶），不同域名并发，避免被服务器封
+    Map<String, List<String>> buckets = new LinkedHashMap<>();
+    for (String url : urls) {
+      String domain = extractDomain(url);
+      buckets.computeIfAbsent(domain, k -> new ArrayList<>()).add(url);
+    }
+    state=new QueueState(new ArrayDeque<>(buckets.values()), concurrency);
+    listener=l; listener.onProgress(state.progress());
     workers.set(concurrency);
     for(int i=0;i<concurrency;i++) new Thread(this::work, "source-fetch-"+i).start();
   }
@@ -194,6 +211,14 @@ public final class FetchManager {
     // 不主动声明 gzip：对齐 2.3.10，避免 Android 透明解压与二次 GZIP 冲突
     return c;
   }
+  private static String extractDomain(String url) {
+    try {
+      String host = new URL(url).getHost();
+      if (host != null) return host.toLowerCase(Locale.ROOT).replaceFirst("^www\\.", "");
+    } catch (Exception ignored) {}
+    return url;
+  }
+
   private InputStream wrapMaybeGzip(InputStream raw, String enc) throws IOException {
     boolean claimGzip = enc != null && enc.toLowerCase(Locale.ROOT).contains("gzip");
     if (!claimGzip) return raw;

@@ -62,6 +62,11 @@ public final class HttpProbe {
     }
   }
 
+  /** 使用指定代理发起请求（用于校验内容级回退：直连拿到内容不对时，用系统代理重试）。 */
+  public static Response fetch(AnalyzeUrlLite req, Map<String, String> sourceHeaders, int timeoutMs, Proxy proxy) throws Exception {
+    return doFetch(req, sourceHeaders, timeoutMs, proxy);
+  }
+
   private static Response doFetch(AnalyzeUrlLite req, Map<String, String> sourceHeaders, int timeoutMs, Proxy proxy) throws Exception {
     if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("cancelled");
     long start = System.currentTimeMillis();

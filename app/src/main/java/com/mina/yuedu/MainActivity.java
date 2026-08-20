@@ -52,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
   private TextInputEditText etUrls;
   private TextView tvLocalStatus, tvModeDesc, tvProgress, tvStatus, tvStats, tvCheckStats;
   private TextView tvFailReasons;
-  private MaterialButton btnCheckDetail, btnUrlHistory;
+  private MaterialButton btnCheckDetail, btnUrlHistory, btnExportOk, btnExportBad, btnExportSkip, btnMergeDomain;
   private View cardRunning, cardResult;
   private LinearLayout boxKindExport, rowCheckTiles;
   private TextView tvExportPreview;
@@ -219,6 +219,14 @@ public class MainActivity extends AppCompatActivity {
     btnCheckDetail.setOnClickListener(v -> showCheckDetail());
     btnUrlHistory = root.findViewById(R.id.btnUrlHistory);
     btnUrlHistory.setOnClickListener(v -> showUrlHistory());
+    btnExportOk = root.findViewById(R.id.btnExportOk);
+    btnExportBad = root.findViewById(R.id.btnExportBad);
+    btnExportSkip = root.findViewById(R.id.btnExportSkip);
+    btnMergeDomain = root.findViewById(R.id.btnMergeDomain);
+    btnExportOk.setOnClickListener(v -> exportByCategory("可用"));
+    btnExportBad.setOnClickListener(v -> exportByCategory("不可用"));
+    btnExportSkip.setOnClickListener(v -> exportByCategory("非HTTP"));
+    btnMergeDomain.setOnClickListener(v -> showMergeDomain());
 
     root.findViewById(R.id.btnChooseJson).setOnClickListener(v -> openDocs.launch(new String[]{"application/json", "text/*", "*/*"}));
     root.findViewById(R.id.btnClear).setOnClickListener(v -> clearAll());
@@ -599,6 +607,7 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.timeoutSeconds = p.getInt("timeout", CheckSourceSettings.DEFAULT_TIMEOUT);
     checkSettings.concurrency = p.getInt("concurrency", CheckSourceSettings.DEFAULT_CONCURRENCY);
     checkSettings.keyword = p.getString("keyword", CheckSourceSettings.DEFAULT_KEYWORD);
+    checkSettings.okStatusRanges = p.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS);
     checkSettings.checkSearch = p.getBoolean("search", true);
     checkSettings.checkDiscovery = p.getBoolean("discovery", true);
     checkSettings.checkInfo = p.getBoolean("info", true);
@@ -618,6 +627,7 @@ public class MainActivity extends AppCompatActivity {
         .putInt("timeout", (int) checkSettings.timeoutSeconds)
         .putInt("concurrency", checkSettings.concurrency)
         .putString("keyword", checkSettings.keyword)
+        .putString("okStatus", checkSettings.okStatusRanges)
         .putBoolean("search", checkSettings.checkSearch)
         .putBoolean("discovery", checkSettings.checkDiscovery)
         .putBoolean("info", checkSettings.checkInfo)
@@ -668,6 +678,8 @@ public class MainActivity extends AppCompatActivity {
     cbKindFile.setChecked(checkSettings.checkFile);
     cbCategory.setEnabled(cbInfo.isChecked());
     cbContent.setEnabled(cbInfo.isChecked() && cbCategory.isChecked());
+    TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
+    if (etOkStatus != null) etOkStatus.setText(checkSettings.okStatusRanges);
   }
 
   private void collectCheckDialog(View v) {
@@ -693,6 +705,10 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.checkVideo = ((MaterialCheckBox) v.findViewById(R.id.cbKindVideo)).isChecked();
     checkSettings.checkAudio = ((MaterialCheckBox) v.findViewById(R.id.cbKindAudio)).isChecked();
     checkSettings.checkFile = ((MaterialCheckBox) v.findViewById(R.id.cbKindFile)).isChecked();
+    TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
+    if (etOkStatus != null) {
+      checkSettings.okStatusRanges = etOkStatus.getText() == null ? "" : etOkStatus.getText().toString().trim();
+    }
     checkSettings.normalize();
   }
 
@@ -826,6 +842,14 @@ public class MainActivity extends AppCompatActivity {
     if (btnCheckDetail != null) {
       btnCheckDetail.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
     }
+    // 分类导出与合并同域：有校验结果时显示
+    boolean hasCheck = !checkResults.isEmpty();
+    if (btnExportOk != null) { /* 显隐由 renderCheckStats 的判断控制，由 exportByCategory 方法检查具体数量 */ }
+    // 控制分类导出区域的显隐（在 renderCheckStats 中通过 rowExportCat 控制）
+    LinearLayout rowCat = findViewById(R.id.rowExportCat);
+    if (rowCat != null) rowCat.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
+    // 合并同域按钮
+    if (btnMergeDomain != null) btnMergeDomain.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
     renderKindExportSwitches();
   }
 
@@ -1122,6 +1146,25 @@ public class MainActivity extends AppCompatActivity {
           List<android.content.pm.ResolveInfo> readers = getPackageManager().queryIntentActivities(
               view, android.content.pm.PackageManager.MATCH_DEFAULT_ONLY);
           if (readers.isEmpty()) throw new ActivityNotFoundException("未找到支持 legado:// 导入的阅读 App");
+          // 多阅读分支支持
+          if (readers.size() > 1) {
+            String[] names = new String[readers.size()];
+            for (int i = 0; i < readers.size(); i++) {
+              names[i] = readers.get(i).loadLabel(getPackageManager()).toString();
+            }
+            new MaterialAlertDialogBuilder(this)
+                .setTitle("选择阅读分支")
+                .setItems(names, (d, w) -> {
+                  android.content.pm.ResolveInfo ri = readers.get(w);
+                  Intent specific = new Intent(Intent.ACTION_VIEW, deepLink);
+                  specific.setPackage(ri.activityInfo.packageName);
+                  try { startActivity(specific); toast("将导入 " + list.size() + " 条到阅读，请再勾选确认"); }
+                  catch (Exception ex) { toast("打开失败：" + ex.getMessage()); }
+                })
+                .setPositiveButton("取消", null)
+                .show();
+            return;
+          }
           startActivity(view);
           toast("将导入 " + list.size() + " 条到阅读，请再勾选确认");
         } catch (Exception e) {
@@ -1376,9 +1419,68 @@ public class MainActivity extends AppCompatActivity {
     new MaterialAlertDialogBuilder(this)
         .setTitle(getString(R.string.app_name) + "  v" + BuildConfig.VERSION_NAME)
         .setMessage("轻量原生 Android 阅读书源整理工具：合并、去重、校验、导入。\n\n"
-            + "GitHub：https://github.com/Mina-kk/yuedu-source-dedupe\n\n"
+            + "GitHub：https://github.com/MIXUULS/yuedu-source-dedupe\n\n"
             + "本机构建版（debug 签名）。")
         .setPositiveButton("确定", null)
+        .show();
+  }
+
+  /** 按分类导出校验结果（可用/不可用/非HTTP）。 */
+  private void exportByCategory(String cat) {
+    List<SourceRecord> list = new ArrayList<>();
+    for (SourceRecord s : exportRecords()) {
+      CheckSourceResult matched = null;
+      for (CheckSourceResult r : checkResults) {
+        if (r.source.getUrl() != null && r.source.getUrl().equals(s.getUrl())) { matched = r; break; }
+      }
+      if (matched == null) continue;
+      String url = s.getUrl();
+      boolean isHttp = url != null && (url.startsWith("http://") || url.startsWith("https://"));
+      if ("可用".equals(cat) && matched.isUsable()) list.add(s);
+      else if ("不可用".equals(cat) && !matched.isUsable() && isHttp) list.add(s);
+      else if ("非HTTP".equals(cat) && !isHttp) list.add(s);
+    }
+    if (list.isEmpty()) { toast("没有符合条件的书源"); return; }
+    toast("正在生成 JSON…");
+    new Thread(() -> {
+      final String json = exportJson(list);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        if (json == null) { toast("生成失败"); return; }
+        pendingSave = json;
+        String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
+        createDoc.launch("去重_" + cat + "_" + list.size() + "_" + d + ".json");
+      });
+    }, "export-cat").start();
+  }
+
+  /** 展示同域合并校验结果（A1搜索失败+A2发现失败→合并后搜索+发现都成功）。 */
+  private void showMergeDomain() {
+    if (checkResults.isEmpty()) { toast("暂无校验结果"); return; }
+    Map<String, CheckSourceEngine.MergeResult> merged = CheckSourceEngine.mergeByDomain(checkResults);
+    LinearLayout list = new LinearLayout(this);
+    list.setOrientation(LinearLayout.VERTICAL);
+    list.setPadding(dp(20), dp(8), dp(20), dp(8));
+    int shown = 0;
+    for (CheckSourceEngine.MergeResult m : merged.values()) {
+      if (shown >= 30) break;
+      shown++;
+      String steps = m.mergedSucceededSteps.isEmpty() ? "无成功步骤" : String.join("、", m.mergedSucceededSteps);
+      TextView tv = new TextView(this);
+      tv.setTextSize(13);
+      tv.setTextColor(ContextCompat.getColor(this, R.color.md_theme_on_surface));
+      tv.setText(m.domain + "（" + m.sources.size() + " 个源）\n    合并后通过步骤：" + steps);
+      tv.setPadding(0, dp(6), 0, dp(6));
+      list.addView(tv);
+    }
+    ScrollView sv = new ScrollView(this);
+    sv.addView(list);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("同域合并结果（共 " + merged.size() + " 个域名" + (merged.size() > shown ? "，显示前 " + shown + " 个" : "") + "）")
+        .setView(sv)
+        .setPositiveButton("关闭", null)
         .show();
   }
 

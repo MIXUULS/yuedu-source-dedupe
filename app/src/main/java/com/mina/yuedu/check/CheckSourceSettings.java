@@ -1,10 +1,11 @@
 package com.mina.yuedu.check;
 
 public final class CheckSourceSettings {
-  public static final int MAX_CONCURRENCY = 100;
+  public static final int MAX_CONCURRENCY = 500;
   public static final int DEFAULT_TIMEOUT = 180;
   public static final int DEFAULT_CONCURRENCY = 8;
   public static final String DEFAULT_KEYWORD = "我的";
+  public static final String DEFAULT_OK_STATUS = "200-399";
 
   public long timeoutSeconds = DEFAULT_TIMEOUT;
   public boolean checkSearch = true;
@@ -19,6 +20,8 @@ public final class CheckSourceSettings {
   public boolean checkVideo = true;
   public boolean checkAudio = true;
   public boolean checkFile = true;
+  /** 可用 HTTP 状态码区间，如 "200-399" 或 "200,403,500-502"。 */
+  public String okStatusRanges = DEFAULT_OK_STATUS;
 
   public void resetToDefaults() {
     timeoutSeconds = DEFAULT_TIMEOUT;
@@ -34,6 +37,7 @@ public final class CheckSourceSettings {
     checkVideo = true;
     checkAudio = true;
     checkFile = true;
+    okStatusRanges = DEFAULT_OK_STATUS;
   }
 
   public void normalize() {
@@ -61,6 +65,25 @@ public final class CheckSourceSettings {
     if (kind == SourceKind.AUDIO) return checkAudio;
     if (kind == SourceKind.FILE) return checkFile;
     return checkNovel;
+  }
+
+  /** 判断 HTTP 状态码是否在可用区间内（如 "200-399" 或 "200,403,500-502"）。 */
+  public boolean isHttpOk(int code) {
+    String r = okStatusRanges;
+    if (r == null || r.trim().isEmpty()) r = DEFAULT_OK_STATUS;
+    for (String part : r.split(",")) {
+      part = part.trim();
+      if (part.isEmpty()) continue;
+      int dash = part.indexOf('-');
+      if (dash > 0) {
+        try { int lo = Integer.parseInt(part.substring(0, dash).trim()); int hi = Integer.parseInt(part.substring(dash + 1).trim()); if (code >= lo && code <= hi) return true; }
+        catch (NumberFormatException ignored) {}
+      } else {
+        try { if (Integer.parseInt(part) == code) return true; }
+        catch (NumberFormatException ignored) {}
+      }
+    }
+    return false;
   }
 
   public long timeoutMillis() { return timeoutSeconds * 1000L; }
