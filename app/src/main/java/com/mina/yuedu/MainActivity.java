@@ -52,7 +52,7 @@ public class MainActivity extends AppCompatActivity {
   private TextInputEditText etUrls;
   private TextView tvLocalStatus, tvModeDesc, tvProgress, tvStatus, tvStats, tvCheckStats;
   private TextView tvFailReasons;
-  private MaterialButton btnCheckDetail, btnUrlHistory, btnExportOk, btnExportBad, btnExportSkip, btnMergeDomain, btnExportCsv;
+  private MaterialButton btnCheckDetail, btnUrlHistory, btnExport;
   private TextInputLayout tilCheckSearch;
   private TextInputEditText etCheckSearch;
   /** 搜索过滤后的校验结果列表，null 表示不使用过滤。 */
@@ -85,12 +85,15 @@ public class MainActivity extends AppCompatActivity {
   private int concurrency = 4, nextOrder, localFileCount, currentTab;
   private final CheckSourceSettings checkSettings = new CheckSourceSettings();
   private String pendingSave, backgroundTaskText = "";
+  /** 校验历史：每次校验完成后记录摘要 + 失败/超时书源 URL（供增量重验）。 */
+  private final java.util.List<CheckHistoryEntry> checkHistory = new ArrayList<>();
   private YckSite yckSite = YckSite.MAIN;
   private YckWebClient yckClient;
   private boolean yckLoaded, yckAutoFellBack;
 
   private ActivityResultLauncher<String[]> openDocs;
   private ActivityResultLauncher<String> createDoc, csvDoc;
+  private ActivityResultLauncher<String[]> configOpen, compareOpen, compareOpenB;
 
   @Override protected void onCreate(@Nullable Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -104,7 +107,10 @@ public class MainActivity extends AppCompatActivity {
       getSupportActionBar().setTitle(R.string.app_name);
       getSupportActionBar().setSubtitle("v" + BuildConfig.VERSION_NAME);
     }
-    toolbar.setOnClickListener(v -> showAbout());
+    toolbar.setNavigationOnClickListener(null);
+    // 右上角「更多」菜单：收纳不常用功能
+    // 菜单项通过 onCreateOptionsMenu 加载，onOptionsItemSelected 处理点击
+    // 将「关于」移入菜单，移除 toolbar 整体点击监听
     tabs = findViewById(R.id.tabs);
     pageContainer = findViewById(R.id.pageContainer);
     applySystemBarInsets(findViewById(R.id.rootCoordinator), findViewById(R.id.appBar), pageContainer);
@@ -113,6 +119,7 @@ public class MainActivity extends AppCompatActivity {
 
     yckSite = YckSite.fromPreference(getSharedPreferences("yck", MODE_PRIVATE).getString("site", "main"));
     loadCheckSettings();
+    loadCheckHistory();
 
     dedupePage = getLayoutInflater().inflate(R.layout.page_dedupe, pageContainer, false);
     pageContainer.addView(dedupePage);
@@ -154,7 +161,52 @@ public class MainActivity extends AppCompatActivity {
       } catch (Exception e) { toast("导出失败：" + e.getMessage()); }
     });
 
+    configOpen = registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+      if (uris == null || uris.isEmpty()) return;
+      new Thread(() -> {
+        final Uri u = uris.get(0);
+        String text;
+        try (InputStream in = getContentResolver().openInputStream(u); ByteArrayOutputStream o = new ByteArrayOutputStream()) {
+          byte[] b = new byte[8192]; int n;
+          while ((n = in.read(b)) >= 0) o.write(b, 0, n);
+          text = o.toString(StandardCharsets.UTF_8.name());
+        } catch (Exception e) {
+          runOnUiThread(() -> { if (!destroyed) toast("读取设置文件失败：" + e.getMessage()); });
+          return;
+        }
+        runOnUiThread(() -> { if (!destroyed) restoreSettings(text); });
+      }, "config-restore").start();
+    });
+
+    compareOpen = registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+      if (uris == null || uris.isEmpty()) return;
+      // 第二份也可单独选择：收集 all Docs 后交给 compareOpenB 拼接
+      readCompareFileA(uris);
+    });
+    compareOpenB = registerForActivityResult(new ActivityResultContracts.OpenMultipleDocuments(), uris -> {
+      if (uris == null || uris.isEmpty()) return;
+      readCompareFileB(uris);
+    });
+
     updateModeDesc();
+  }
+
+  @Override public boolean onCreateOptionsMenu(android.view.Menu menu) {
+    getMenuInflater().inflate(R.menu.menu_main, menu);
+    return true;
+  }
+
+  @Override public boolean onOptionsItemSelected(android.view.MenuItem item) {
+    int id = item.getItemId();
+    if (id == R.id.action_history) showCheckHistory();
+    else if (id == R.id.action_recheck) recheckFailedSources();
+    else if (id == R.id.action_preset) showDedupePresetMenu();
+    else if (id == R.id.action_backup) showConfigMenu();
+    else if (id == R.id.action_compare) showCompareMenu();
+    else if (id == R.id.action_report) showChangeReport();
+    else if (id == R.id.action_about) showAbout();
+    else return super.onOptionsItemSelected(item);
+    return true;
   }
 
   @Override protected void onDestroy() {
@@ -230,16 +282,8 @@ public class MainActivity extends AppCompatActivity {
     btnCheckDetail.setOnClickListener(v -> showCheckDetail());
     btnUrlHistory = root.findViewById(R.id.btnUrlHistory);
     btnUrlHistory.setOnClickListener(v -> showUrlHistory());
-    btnExportOk = root.findViewById(R.id.btnExportOk);
-    btnExportBad = root.findViewById(R.id.btnExportBad);
-    btnExportSkip = root.findViewById(R.id.btnExportSkip);
-    btnMergeDomain = root.findViewById(R.id.btnMergeDomain);
-    btnExportCsv = root.findViewById(R.id.btnExportCsv);
-    btnExportOk.setOnClickListener(v -> exportByCategory("可用"));
-    btnExportBad.setOnClickListener(v -> exportByCategory("不可用"));
-    btnExportSkip.setOnClickListener(v -> exportByCategory("非HTTP"));
-    btnMergeDomain.setOnClickListener(v -> showMergeDomain());
-    btnExportCsv.setOnClickListener(v -> exportCsv());
+    btnExport = root.findViewById(R.id.btnExport);
+    btnExport.setOnClickListener(v -> showExportMenu());
     tilCheckSearch = root.findViewById(R.id.tilCheckSearch);
     etCheckSearch = root.findViewById(R.id.etCheckSearch);
     if (etCheckSearch != null) {
@@ -272,6 +316,10 @@ public class MainActivity extends AppCompatActivity {
     btnCheck.setOnClickListener(v -> showCheckDialog());
     btnImport.setOnClickListener(v -> importReader());
     btnSave.setOnClickListener(v -> saveJson());
+
+    root.findViewById(R.id.btnShare).setOnClickListener(v -> showShareMenu());
+    root.findViewById(R.id.btnPasteImport).setOnClickListener(v -> pasteImport());
+    // 其余不常用功能（校验历史/重验失败/去重预设/设置备份/版本对比/变更报告）收纳到右上角「更多」菜单，见 onCreate toolbar.setOnMenuItemClickListener
   }
 
   private void updateModeDesc() { tvModeDesc.setText(mode.description()); }
@@ -542,6 +590,17 @@ public class MainActivity extends AppCompatActivity {
     recompute(false);
   }
 
+  /** 直接提交一组 SourceRecord（无需构造 ParseResult）到去重 buckets，复用 commitLocal 流程。 */
+  private void commitRecords(String label, List<SourceRecord> records) {
+    if (records == null || records.isEmpty()) return;
+    operationMode.start(); mode = operationMode.resultMode();
+    synchronized (buckets) { buckets.addLocal(reorder(records)); }
+    localFileCount++;
+    tvLocalStatus.setVisibility(View.VISIBLE);
+    tvLocalStatus.setText("已添加本地 JSON：" + localFileCount + " 个文件 · " + buckets.localCount() + " 条书源");
+    recompute(false);
+  }
+
   private SharedPreferences checkPrefs() {
     return getSharedPreferences("check", MODE_PRIVATE);
   }
@@ -783,7 +842,11 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void runCheck(CheckSourceSettings settings) {
-    List<SourceRecord> targets = new ArrayList<>(result.getRetained());
+    runCheck(settings, result == null ? new ArrayList<>() : new ArrayList<>(result.getRetained()));
+  }
+
+  private void runCheck(CheckSourceSettings settings, java.util.List<SourceRecord> targetList) {
+    List<SourceRecord> targets = new ArrayList<>(targetList);
     fetchRunning = false;
     checkRunning = true;
     checkCancelRequested = false;
@@ -814,6 +877,7 @@ public class MainActivity extends AppCompatActivity {
           if (destroyed) return;
           boolean wasCancelled = checkCancelRequested || (checkEngine != null && checkEngine.isCancelled());
           checkResults = results;
+          rememberCheckHistory(results);
           checkRunning = false;
           checkCancelRequested = false;
           checkEngine = null;
@@ -874,15 +938,9 @@ public class MainActivity extends AppCompatActivity {
     }
     // 搜索框：有校验结果时显示
     if (tilCheckSearch != null) tilCheckSearch.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
-    // 分类导出与合并同域：有校验结果时显示
+    // 导出按钮（含 分类导出 / CSV / 合并同域）：有校验结果时显示
     boolean hasCheck = !checkResults.isEmpty();
-    if (btnExportOk != null) { /* 显隐由 renderCheckStats 的判断控制，由 exportByCategory 方法检查具体数量 */ }
-    // 控制分类导出区域的显隐（在 renderCheckStats 中通过 rowExportCat 控制）
-    LinearLayout rowCat = findViewById(R.id.rowExportCat);
-    if (rowCat != null) rowCat.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
-    // 合并同域按钮
-    if (btnMergeDomain != null) btnMergeDomain.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
-    if (btnExportCsv != null) btnExportCsv.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
+    if (btnExport != null) btnExport.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
     renderKindExportSwitches();
   }
 
@@ -956,36 +1014,89 @@ public class MainActivity extends AppCompatActivity {
       if (filter == 3 && r.status != CheckSourceResult.Status.TIMEOUT) continue;
       list.add(r);
     }
+    if (list.isEmpty()) { toast("该分类暂无结果"); return; }
     // 按耗时降序（最慢的排前面，便于发现慢源）
     list.sort((a, b) -> Long.compare(b.respondTimeMs, a.respondTimeMs));
+    final java.util.Set<Integer> selected = new java.util.TreeSet<>();
     LinearLayout content = new LinearLayout(this);
     content.setOrientation(LinearLayout.VERTICAL);
-    content.setPadding(dp(20), dp(8), dp(20), dp(8));
+    content.setPadding(dp(8), dp(8), dp(8), dp(8));
+    final java.util.List<MaterialCheckBox> boxes = new ArrayList<>();
+    // 操作栏固定在弹窗顶部：勾选后导出/复制/移除选中项（无需滑到底部）
+    TextView hint = new TextView(this);
+    hint.setText("勾选书源后，用上方操作栏 导出 / 复制 / 移除选中项");
+    hint.setTextSize(12);
+    hint.setTextColor(Color.GRAY);
+    hint.setPadding(dp(4), dp(4), dp(4), dp(4));
+    content.addView(hint);
+    LinearLayout actions = new LinearLayout(this);
+    actions.setOrientation(LinearLayout.HORIZONTAL);
+    actions.setPadding(dp(4), dp(4), dp(4), dp(8));
+    MaterialButton btnExportSel = new MaterialButton(this);
+    btnExportSel.setText("导出选中");
+    MaterialButton btnCopySel = new MaterialButton(this);
+    btnCopySel.setText("复制选中");
+    MaterialButton btnRemoveSel = new MaterialButton(this);
+    btnRemoveSel.setText("移除选中");
+    actions.addView(btnExportSel);
+    actions.addView(btnCopySel);
+    actions.addView(btnRemoveSel);
+    content.addView(actions);
     int shown = 0;
-    for (CheckSourceResult r : list) {
+    for (int idx = 0; idx < list.size(); idx++) {
       if (shown >= 200) break;
+      CheckSourceResult r = list.get(idx);
       shown++;
-      String statusText;
-      int colorRes;
+      String statusText, colorStr;
       switch (r.status) {
-        case SUCCESS: statusText = "✓"; colorRes = R.color.md_theme_success; break;
-        case TIMEOUT: statusText = "⏱"; colorRes = R.color.md_theme_secondary; break;
-        default: statusText = "✗"; colorRes = R.color.md_theme_error;
+        case SUCCESS: statusText = "✓"; colorStr = "#00C853"; break;
+        case TIMEOUT: statusText = "⏱"; colorStr = "#606060"; break;
+        default: statusText = "✗"; colorStr = "#D32F2F";
       }
       String name = r.source.getName();
       if (name == null || name.trim().isEmpty()) name = r.source.getUrl();
       String msg = r.message == null || r.message.trim().isEmpty() ? r.status.name() : r.message.trim();
-      TextView tv = new TextView(this);
-      tv.setTextSize(13);
-      tv.setTextColor(ContextCompat.getColor(this, colorRes));
-      tv.setText(statusText + " " + (name == null ? "(无名)" : name)
-          + "   " + r.respondTimeMs + "ms\n    " + msg);
-      tv.setPadding(0, dp(5), 0, dp(5));
-      content.addView(tv);
+      MaterialCheckBox cb = new MaterialCheckBox(this);
+      cb.setText(statusText + " " + (name == null ? "(无名)" : name) + "   " + r.respondTimeMs + "ms\n    " + msg);
+      cb.setTextSize(13);
+      cb.setTextColor(Color.parseColor(colorStr));
+      cb.setPadding(dp(4), dp(3), dp(4), dp(3));
+      final int position = idx;
+      cb.setOnCheckedChangeListener((b, on) -> { if (on) selected.add(position); else selected.remove(position); });
+      content.addView(cb);
+      boxes.add(cb);
     }
+
+    LinearLayout wrapper = new LinearLayout(this);
+    wrapper.setOrientation(LinearLayout.VERTICAL);
+    wrapper.addView(content);
+    final java.util.List<CheckSourceResult> finalList = list;
+    btnExportSel.setOnClickListener(v -> {
+      List<SourceRecord> recs = new ArrayList<>();
+      for (Integer i : selected) recs.add(finalList.get(i).source);
+      if (recs.isEmpty()) { toast("请先勾选要导出的书源"); return; }
+      saveShareFile(recs);
+    });
+    btnCopySel.setOnClickListener(v -> {
+      List<SourceRecord> recs = new ArrayList<>();
+      for (Integer i : selected) recs.add(finalList.get(i).source);
+      if (recs.isEmpty()) { toast("请先勾选要复制的书源"); return; }
+      shareToClipboard(recs);
+    });
+    btnRemoveSel.setOnClickListener(v -> {
+      if (selected.isEmpty()) { toast("请先勾选要移除的书源"); return; }
+      java.util.Set<String> removeUrls = new HashSet<>();
+      for (Integer i : selected) {
+        String u = finalList.get(i).source.getUrl();
+        if (u != null) removeUrls.add(u);
+      }
+      removeSourcesFromResult(removeUrls);
+      new MaterialAlertDialogBuilder(this).setTitle("已移除").setMessage("已移除 " + removeUrls.size() + " 条选中书源").setPositiveButton("确定", null).show();
+    });
+
     ScrollView sv = new ScrollView(this);
-    sv.addView(content);
-    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.addView(wrapper);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.65f);
     sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
     String title = (filter == 1 ? "成功" : filter == 2 ? "失败" : filter == 3 ? "超时" : "全部")
         + " " + list.size() + " 条" + (list.size() > shown ? "（显示前 " + shown + " 条）" : "");
@@ -994,6 +1105,34 @@ public class MainActivity extends AppCompatActivity {
         .setView(sv)
         .setPositiveButton("关闭", null)
         .show();
+  }
+
+  /** 从去重结果与校验结果中移除指定 URL 的书源。 */
+  private void removeSourcesFromResult(java.util.Set<String> urls) {
+    if (result == null) { toast("当前无结果"); return; }
+    java.util.Set<String> removeSet = new HashSet<>(urls);
+    List<SourceRecord> kept = new ArrayList<>();
+    for (SourceRecord s : result.getRetained()) {
+      if (s.getUrl() == null || !removeSet.contains(s.getUrl())) kept.add(s);
+    }
+    java.util.Set<String> keptUrls = new HashSet<>();
+    for (SourceRecord s : kept) { keptUrls.add(s.getUrl()); }
+    List<CheckSourceResult> newChecks = new ArrayList<>();
+    for (CheckSourceResult c : checkResults) {
+      if (c.source.getUrl() == null || keptUrls.contains(c.source.getUrl())) newChecks.add(c);
+    }
+    // 重建结果（保留分组结构）
+    List<DuplicateGroup> newGroups = new ArrayList<>();
+    for (DuplicateGroup g : result.getDuplicateGroups()) {
+      List<SourceRecord> removed = new ArrayList<>();
+      for (SourceRecord s : g.getRemoved()) if (s.getUrl() == null || !removeSet.contains(s.getUrl())) removed.add(s);
+      if (removed.size() == g.getRemoved().size() && g.getKey() != null) newGroups.add(g);
+    }
+    result = new DedupeResult(result.getOriginalCount(), kept, newGroups, result.getInvalid());
+    checkResults = newChecks;
+    renderCheckStats();
+    refreshExportPreview();
+    toast("已移除选中书源，可从「解析网络源」重新去重");
   }
 
   private void setStatValue(int tileId, int number) {
@@ -1154,6 +1293,20 @@ public class MainActivity extends AppCompatActivity {
       gs = gs.replaceAll("(?:,)?✔\\d{4}-\\d{1,2}-\\d{1,2}检验去重（优质\\d+）", "");
       if (gs.startsWith(",")) gs = gs.substring(1);
       m.put("bookSourceGroup", gs.isEmpty() ? mark : gs + "," + mark);
+      // 自动分类标签：按书源类型把分类追加到分组，便于阅读内部分组
+      try {
+        String kindLabel = SourceKind.of(s).label;
+        if (kindLabel != null && !kindLabel.isEmpty()) {
+          List<String> groupParts = new ArrayList<>(Arrays.asList(gs.split(",")));
+          boolean hasKind = false;
+          for (String part : groupParts) if (part.trim().equals(kindLabel)) { hasKind = true; break; }
+          if (!hasKind) {
+            groupParts.add(kindLabel);
+            String joined = String.join(",", groupParts).replace(",,", ",");
+            m.put("bookSourceGroup", joined);
+          }
+        }
+      } catch (Exception ignored) {}
       // attach check groups if any
       for (CheckSourceResult cr : checkResults) {
         if (cr.source.getUrl() != null && cr.source.getUrl().equals(s.getUrl()) && !cr.groups.isEmpty()) {
@@ -1383,7 +1536,7 @@ public class MainActivity extends AppCompatActivity {
     s.setMediaPlaybackRequiresUserGesture(true);
     s.setBuiltInZoomControls(true);
     s.setDisplayZoomControls(false);
-    yck.addJavascriptInterface(new YckBridge(this::collectYckUrl), "YckDedupe");
+    yck.addJavascriptInterface(new YckBridge(this::collectYckUrl, this::batchCollectYckUrls), "YckDedupe");
     yckClient = new YckWebClient(new YckWebClient.Listener() {
       public void onJsonLink(String u) { showJsonMenu(u); }
       public void onExternal(String u) { toast("已拦截非 YCK 页面"); }
@@ -1433,6 +1586,28 @@ public class MainActivity extends AppCompatActivity {
     }
     return out[0];
   }
+
+  /** 批量收集 YCK 页面上的书源 URL（JSON 数组字符串），返回 "added:N" 表示成功添加 N 条。 */
+  private String batchCollectYckUrls(String jsonUrls) {
+    try {
+      Object root = com.mina.yuedu.core.MiniJson.parse(jsonUrls);
+      if (!(root instanceof java.util.List)) return "invalid";
+      final java.util.List<String> urls = new java.util.ArrayList<>();
+      for (Object o : (java.util.List<?>) root) {
+        if (o instanceof String && YckUrlPolicy.collectable((String) o)) urls.add((String) o);
+      }
+      if (urls.isEmpty()) return "invalid";
+      final int[] added = {0};
+      final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+      runOnUiThread(() -> {
+        for (String u : urls) if (appendUrlIfAbsent(u)) added[0]++;
+        latch.countDown();
+      });
+      try { latch.await(3000, java.util.concurrent.TimeUnit.MILLISECONDS); } catch (Exception e) {}
+      return "added:" + added[0];
+    } catch (Exception e) { return "invalid"; }
+  }
+
   private void injectYckCollector() {
     yck.post(() -> yck.evaluateJavascript(YckCollectorScript.source(), null));
     yck.postDelayed(() -> yck.evaluateJavascript(YckCollectorScript.source(), null), 800);
@@ -1489,17 +1664,40 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void showAbout() {
+    TextView tv = new TextView(this);
+    tv.setPadding(dp(24), dp(12), dp(24), dp(12));
+    tv.setText("轻量原生 Android 阅读书源整理工具：合并、去重、校验、导入。\n\n"
+        + "GitHub：https://github.com/MIXUULS/yuedu-source-dedupe\n\n"
+        + "本机构建版（debug 签名）。");
+    tv.setAutoLinkMask(android.text.util.Linkify.WEB_URLS);
+    tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+    tv.setTextSize(14);
+    tv.setLinkTextColor(ContextCompat.getColor(this, R.color.md_theme_primary));
     new MaterialAlertDialogBuilder(this)
         .setTitle(getString(R.string.app_name) + "  v" + BuildConfig.VERSION_NAME)
-        .setMessage("轻量原生 Android 阅读书源整理工具：合并、去重、校验、导入。\n\n"
-            + "GitHub：https://github.com/MIXUULS/yuedu-source-dedupe\n\n"
-            + "本机构建版（debug 签名）。")
+        .setView(tv)
         .setPositiveButton("确定", null)
-        .setNeutralButton("重置阅读分支", (d, w) -> {
-          appPrefs().edit().remove("readerBranch").apply();
-          toast("已重置阅读分支选择，下次导入时将重新选择");
-        })
         .show();
+  }
+
+  /** 导出下拉菜单：分类导出（可用/不可用/非HTTP）+ CSV + 合并同域校验结果。 */
+  private void showExportMenu() {
+    PopupMenu pm = new PopupMenu(this, btnExport);
+    pm.getMenu().add(0, 1, 0, "导出可用书源");
+    pm.getMenu().add(0, 2, 1, "导出不可用书源");
+    pm.getMenu().add(0, 3, 2, "导出非HTTP书源");
+    pm.getMenu().add(0, 4, 3, "导出 CSV（可在电脑打开）");
+    pm.getMenu().add(0, 5, 4, "合并同域校验结果");
+    pm.setOnMenuItemClickListener(item -> {
+      int id = item.getItemId();
+      if (id == 1) exportByCategory("可用");
+      else if (id == 2) exportByCategory("不可用");
+      else if (id == 3) exportByCategory("非HTTP");
+      else if (id == 4) exportCsv();
+      else if (id == 5) showMergeDomain();
+      return true;
+    });
+    pm.show();
   }
 
   /** 按分类导出校验结果（可用/不可用/非HTTP）。 */
@@ -1607,5 +1805,752 @@ public class MainActivity extends AppCompatActivity {
     else if (currentTab == 1) { tabs.selectTab(tabs.getTabAt(0)); showDedupe(); }
     else new MaterialAlertDialogBuilder(this).setTitle("退出确认").setMessage("确定要退出阅读书源去重吗？")
       .setPositiveButton("退出", (d, w) -> finish()).setNegativeButton("取消", null).show();
+  }
+
+  // ================= ==== 新增：书源分享 / 剪贴板导入 ================= ====
+
+  /** 分享书源：一键底部菜单（复制文本 / 保存文件 / 二维码 / 自用分享链接）。 */
+  private void showShareMenu() {
+    final List<SourceRecord> records = exportRecords();
+    BottomSheetDialog d = new BottomSheetDialog(this);
+    d.setContentView(buildShareSheet(records, d));
+    d.show();
+  }
+
+  private View buildShareSheet(final List<SourceRecord> records, final BottomSheetDialog dialog) {
+    LinearLayout root = new LinearLayout(this);
+    root.setOrientation(LinearLayout.VERTICAL);
+    int pad = dp(16);
+    root.setPadding(pad, dp(20), pad, dp(12));
+    TextView title = new TextView(this);
+    title.setText(records.isEmpty() ? "分享与导入" : "分享书源（共 " + records.size() + " 条）");
+    title.setTextSize(16);
+    title.setPadding(0, 0, 0, dp(8));
+    root.addView(title);
+    if (records.isEmpty()) {
+      TextView hint = new TextView(this);
+      hint.setText("暂无待分享的书源。请先选择 JSON 文件或输入地址解析，也可直接从剪贴板导入已有书源文本。");
+      hint.setTextSize(13);
+      hint.setPadding(0, 0, 0, dp(8));
+      root.addView(hint);
+    }
+    root.addView(sheetButton("📄 复制分享文本（包含校验备注）", v -> {
+      if (records.isEmpty()) { toast("暂无书源可分享，请先解析或导入"); return; }
+      shareToClipboard(records); dialog.dismiss();
+    }));
+    root.addView(sheetButton("💾 保存为 JSON 文件", v -> {
+      if (records.isEmpty()) { toast("暂无书源可分享，请先解析或导入"); return; }
+      saveShareFile(records); dialog.dismiss();
+    }));
+    root.addView(sheetButton("🔗 生成自用分享链接", v -> {
+      if (records.isEmpty()) { toast("暂无书源可分享，请先解析或导入"); return; }
+      shareSelfLink(records); dialog.dismiss();
+    }));
+    root.addView(sheetButton("▦ 生成二维码", v -> {
+      if (records.isEmpty()) { toast("暂无书源可分享，请先解析或导入"); return; }
+      showQrFor(records); dialog.dismiss();
+    }));
+    root.addView(sheetButton("📥 从剪贴板导入书源", v -> { pasteImport(); dialog.dismiss(); }));
+    return root;
+  }
+
+  private TextView sheetButton(String text, View.OnClickListener l) {
+    TextView tv = new TextView(this);
+    tv.setText(text);
+    tv.setPadding(0, dp(12), 0, dp(12));
+    tv.setTextSize(15);
+    tv.setOnClickListener(l);
+    return tv;
+  }
+
+  /** 复制分享文本到剪贴板。文本为完整书源 JSON 数组，含校验备注。 */
+  private void shareToClipboard(final List<SourceRecord> records) {
+    new Thread(() -> {
+      final String json = exportJson(records);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        if (json == null) { toast("生成分享文本失败"); return; }
+        ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        cm.setPrimaryClip(ClipData.newPlainText("阅读书源", json));
+        toast("分享文本已复制到剪贴板");
+      });
+    }, "share-copy").start();
+  }
+
+  /** 保存分享 JSON 文件。 */
+  private void saveShareFile(final List<SourceRecord> records) {
+    toast("正在生成 JSON…");
+    new Thread(() -> {
+      final String json = exportJson(records);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        if (json == null) { toast("生成失败"); return; }
+        pendingSave = json;
+        String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
+        createDoc.launch("分享书源_" + records.size() + "_" + d + ".json");
+      });
+    }, "share-save").start();
+  }
+
+  /** 生成自用分享链接（本机临时 HTTP 服务，对方可用浏览器/阅读拉取）。 */
+  private void shareSelfLink(final List<SourceRecord> records) {
+    new Thread(() -> {
+      final String json = exportJson(records);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        if (json == null) { toast("生成失败"); return; }
+        try {
+          String url = ReaderImportService.prepare(this, json, 30L * 60L * 1000L);
+          ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+          cm.setPrimaryClip(ClipData.newPlainText("自用分享链接", url));
+          showLinkDialog(url);
+        } catch (Exception e) {
+          ReaderImportService.cancel(this);
+          toast("生成分享链接失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+        }
+      });
+    }, "share-link").start();
+  }
+
+  /** 展示自用分享链接：复制 / 生成二维码。 */
+  private void showLinkDialog(String url) {
+    final String link = url;
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("自用分享链接（本机短时有效）")
+        .setMessage(link + "\n\n对方可在浏览器或阅读的「从URL导入」中打开。链接仅在本机生成后的 30 分钟内有效。")
+        .setItems(new String[]{"复制链接", "生成二维码", "关闭"}, (d, w) -> {
+          if (w == 0) {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText("自用分享链接", link));
+            toast("链接已复制");
+          } else if (w == 1) {
+            showQrImage(link, "书源分享链接");
+          }
+        })
+        .show();
+  }
+
+  /** 生成二维码弹窗：内容为分享内容（若过长则提示改用文件/文本）。 */
+  private void showQrFor(final List<SourceRecord> records) {
+    // 书源数组往往超出二维码容量（约 3KB），二维码放自用分享链接（短 URL）最实用。
+    new Thread(() -> {
+      final String json = exportJson(records);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        if (json == null) { toast("生成失败"); return; }
+        if (json.length() > 2000) {
+          toast("书源内容较大，二维码无法完整承载，请改用「复制文本」或「保存文件」");
+          return;
+        }
+        showQrImage(json, "书源分享二维码");
+      });
+    }, "share-qr").start();
+  }
+
+  /** 用 ZXing 生成二维码并弹窗展示。 */
+  private void showQrImage(String content, String title) {
+    try {
+      java.util.Map<com.google.zxing.EncodeHintType, Object> hints = new HashMap<>();
+      hints.put(com.google.zxing.EncodeHintType.MARGIN, 1);
+      hints.put(com.google.zxing.EncodeHintType.CHARACTER_SET, "UTF-8");
+      com.google.zxing.common.BitMatrix matrix = new com.google.zxing.qrcode.QRCodeWriter()
+          .encode(content, com.google.zxing.BarcodeFormat.QR_CODE, 720, 720, hints);
+      int w = matrix.getWidth(), h = matrix.getHeight();
+      int[] pixels = new int[w * h];
+      for (int y = 0; y < h; y++) {
+        int off = y * w;
+        for (int x = 0; x < w; x++) pixels[off + x] = matrix.get(x, y) ? 0xFF000000 : 0xFFFFFFFF;
+      }
+      android.graphics.Bitmap bmp = android.graphics.Bitmap.createBitmap(w, h, android.graphics.Bitmap.Config.RGB_565);
+      bmp.setPixels(pixels, 0, w, 0, 0, w, h);
+      android.widget.ImageView iv = new android.widget.ImageView(this);
+      iv.setImageBitmap(bmp);
+      int pad = dp(16);
+      iv.setPadding(pad * 6, pad * 3, pad * 6, 0);
+      new MaterialAlertDialogBuilder(this)
+          .setTitle(title)
+          .setView(iv)
+          .setNegativeButton("复制内容", (d, ww) -> {
+            ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(ClipData.newPlainText(title, content));
+            toast("内容已复制");
+          })
+          .setPositiveButton("关闭", null)
+          .show();
+    } catch (Exception e) {
+      toast("生成二维码失败：" + (e.getMessage() == null ? e.getClass().getSimpleName() : e.getMessage()));
+    }
+  }
+
+  /** 从剪贴板导入书源文本：读取 → 解析 → 合并到去重结果。 */
+  private void pasteImport() {
+    ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+    if (cm == null || cm.getPrimaryClip() == null || cm.getPrimaryClip().getItemCount() == 0) {
+      toast("剪贴板为空"); return;
+    }
+    CharSequence clip = cm.getPrimaryClip().getItemAt(0).getText();
+    if (clip == null || clip.toString().trim().isEmpty()) { toast("剪贴板中没有文本内容"); return; }
+    final String text = clip.toString().trim();
+    final String hint = text.length() > 120 ? text.substring(0, 120) + "…" : text;
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("从剪贴板导入书源")
+        .setMessage("将剪贴板内容解析为书源并入去重流程：\n\n" + hint + "\n\n确认吗？")
+        .setPositiveButton("导入", (d, w) -> {
+          if (!(text.startsWith("[") || text.startsWith("{"))) { toast("剪贴板内容不是书源 JSON"); return; }
+          new Thread(() -> {
+            final SourceParser.ParseResult p = SourceParser.parseArray(text, 0);
+            runOnUiThread(() -> {
+              if (destroyed) return;
+              if (p.getRecords().isEmpty()) { toast("未解析到有效书源：" + (p.getInvalid().isEmpty() ? "" : p.getInvalid().get(0).getDetail())); return; }
+              commitLocal("剪贴板", p);
+              toast("已从剪贴板导入 " + p.getRecords().size() + " 条书源");
+            });
+          }, "paste-import").start();
+        })
+        .setNegativeButton("取消", null)
+        .show();
+  }
+
+  // ============= 新增：配置 一键备份 / 还原 =============
+
+  private void showConfigMenu() {
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("设置 备份 / 还原")
+        .setMessage("可导出去重模式、并发数、校验五步、自定义状态码、快速模式、导入分类等核心行为设置，不含 URL 历史等个人数据。")
+        .setItems(new String[]{"备份设置（保存为 JSON 文件）", "从备份文件还原", "取消"}, (d, w) -> {
+          if (w == 0) backupSettings();
+          else if (w == 1) configOpen.launch(new String[]{"application/json", "text/*", "*/*"});
+        })
+        .show();
+  }
+
+  /** 备份核心行为设置到 JSON 文件（复用 createDoc 保存）。 */
+  private void backupSettings() {
+    Map<String, Object> cfg = new LinkedHashMap<>();
+    cfg.put("version", 1);
+    SharedPreferences app = appPrefs();
+    cfg.put("mode", app.getString("mode", DedupeMode.STANDARD.name()));
+    cfg.put("clean", app.getBoolean("clean", false));
+    cfg.put("onlyUsable", app.getBoolean("onlyUsable", false));
+    cfg.put("concurrency", app.getInt("concurrency", 4));
+    SharedPreferences check = checkPrefs();
+    cfg.put("timeout", check.getInt("timeout", CheckSourceSettings.DEFAULT_TIMEOUT));
+    cfg.put("checkConcurrency", check.getInt("concurrency", CheckSourceSettings.DEFAULT_CONCURRENCY));
+    cfg.put("keyword", check.getString("keyword", CheckSourceSettings.DEFAULT_KEYWORD));
+    cfg.put("okStatus", check.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS));
+    cfg.put("quickMode", check.getBoolean("quickMode", false));
+    Map<String, Object> steps = new LinkedHashMap<>();
+    steps.put("search", check.getBoolean("search", true));
+    steps.put("discovery", check.getBoolean("discovery", true));
+    steps.put("info", check.getBoolean("info", true));
+    steps.put("category", check.getBoolean("category", true));
+    steps.put("content", check.getBoolean("content", true));
+    cfg.put("checkSteps", steps);
+    Map<String, Object> kinds = new LinkedHashMap<>();
+    kinds.put("novel", check.getBoolean("kindNovel", true));
+    kinds.put("comic", check.getBoolean("kindComic", true));
+    kinds.put("video", check.getBoolean("kindVideo", true));
+    kinds.put("audio", check.getBoolean("kindAudio", true));
+    kinds.put("file", check.getBoolean("kindFile", true));
+    cfg.put("checkKinds", kinds);
+    pendingSave = MiniJson.stringify(cfg);
+    String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
+    createDoc.launch("书源工具设置备份_" + d + ".json");
+  }
+
+  /** 从备份 JSON 还原核心设置。 */
+  private void restoreSettings(String text) {
+    Object root;
+    try { root = MiniJson.parse(text); } catch (Exception e) { toast("设置文件解析失败：" + e.getMessage()); return; }
+    if (!(root instanceof Map)) { toast("设置文件格式不正确"); return; }
+    @SuppressWarnings("unchecked") Map<String, Object> m = (Map<String, Object>) root;
+    Object version = m.get("version");
+    if (version == null) { toast("不是本工具的设置备份文件"); return; }
+    try {
+      SharedPreferences.Editor app = appPrefs().edit();
+      if (m.get("mode") != null) app.putString("mode", String.valueOf(m.get("mode")));
+      if (m.get("clean") != null) app.putBoolean("clean", bool(m.get("clean")));
+      if (m.get("onlyUsable") != null) app.putBoolean("onlyUsable", bool(m.get("onlyUsable")));
+      if (m.get("concurrency") != null) app.putInt("concurrency", ((Number) m.get("concurrency")).intValue());
+      app.apply();
+
+      SharedPreferences.Editor check = checkPrefs().edit();
+      if (m.get("timeout") != null) check.putInt("timeout", ((Number) m.get("timeout")).intValue());
+      if (m.get("checkConcurrency") != null) check.putInt("concurrency", ((Number) m.get("checkConcurrency")).intValue());
+      if (m.get("keyword") != null) check.putString("keyword", String.valueOf(m.get("keyword")));
+      if (m.get("okStatus") != null) check.putString("okStatus", String.valueOf(m.get("okStatus")));
+      if (m.get("quickMode") != null) check.putBoolean("quickMode", bool(m.get("quickMode")));
+      Object steps = m.get("checkSteps");
+      if (steps instanceof Map) {
+        Map<?, ?> sm = (Map<?, ?>) steps;
+        if (sm.get("search") != null) check.putBoolean("search", bool(sm.get("search")));
+        if (sm.get("discovery") != null) check.putBoolean("discovery", bool(sm.get("discovery")));
+        if (sm.get("info") != null) check.putBoolean("info", bool(sm.get("info")));
+        if (sm.get("category") != null) check.putBoolean("category", bool(sm.get("category")));
+        if (sm.get("content") != null) check.putBoolean("content", bool(sm.get("content")));
+      }
+      Object kinds = m.get("checkKinds");
+      if (kinds instanceof Map) {
+        Map<?, ?> km = (Map<?, ?>) kinds;
+        if (km.get("novel") != null) check.putBoolean("kindNovel", bool(km.get("novel")));
+        if (km.get("comic") != null) check.putBoolean("kindComic", bool(km.get("comic")));
+        if (km.get("video") != null) check.putBoolean("kindVideo", bool(km.get("video")));
+        if (km.get("audio") != null) check.putBoolean("kindAudio", bool(km.get("audio")));
+        if (km.get("file") != null) check.putBoolean("kindFile", bool(km.get("file")));
+      }
+      check.apply();
+
+      loadCheckSettings();
+      restorePrefs();
+      toast("设置已还原");
+    } catch (Exception e) {
+      toast("还原设置失败：" + e.getMessage());
+    }
+  }
+
+  private static boolean bool(Object o) {
+    if (o instanceof Boolean) return (Boolean) o;
+    if (o instanceof Number) return ((Number) o).intValue() != 0;
+    return Boolean.parseBoolean(String.valueOf(o));
+  }
+
+  // ============= 新增：版本对比 / 增量合并 =============
+
+  private Uri compareUriA;   // 版本对比第一份文件的 Uri（选择第二份后再对比）
+
+  private void showCompareMenu() {
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("版本对比（两份书源文件）")
+        .setMessage("选择两份书源 JSON 文件，逐条对比「新增 / 修改 / 移除」，并可将新增并入去重流程。\n\n可一次选两份，或分两次各选一份。")
+        .setItems(new String[]{"开始选择第一份", "取消"}, (d, w) -> {
+          if (w == 0) compareOpen.launch(new String[]{"application/json", "text/*", "*/*"});
+        })
+        .show();
+  }
+
+  /** 选择第一份：若本次选了 ≥2 份则直接对比；只选 1 份则打开第二份选择。 */
+  private void readCompareFileA(java.util.List<Uri> uris) {
+    if (uris.size() >= 2) {
+      compareUriA = uris.get(0);
+      loadCompareBoth(compareUriA, uris.get(1));
+    } else {
+      compareUriA = uris.get(0);
+      toast("已选第一份，请再选择第二份");
+      compareOpenB.launch(new String[]{"application/json", "text/*", "*/*"});
+    }
+  }
+
+  /** 选择第二份：与已保存的第一份直接对比。 */
+  private void readCompareFileB(java.util.List<Uri> uris) {
+    if (compareUriA == null) { toast("请先选择第一份"); return; }
+    loadCompareBoth(compareUriA, uris.get(0));
+  }
+
+  /** 依次读取两份文件内容并解析对比。 */
+  private void loadCompareBoth(Uri a, Uri b) {
+    toast("正在读取两份文件对比…");
+    new Thread(() -> {
+      String ta = readUriText(a);
+      String tb = readUriText(b);
+      if (ta == null || tb == null) {
+        runOnUiThread(() -> { if (!destroyed) toast("读取文件失败"); });
+        return;
+      }
+      SourceParser.ParseResult pa = SourceParser.parseArray(ta, 0);
+      SourceParser.ParseResult pb = SourceParser.parseArray(tb, 0);
+      runOnUiThread(() -> {
+        if (destroyed) return;
+        showCompareResult(pa.getRecords(), pb.getRecords());
+      });
+    }, "compare-load").start();
+  }
+
+  private String readUriText(Uri u) {
+    try (InputStream in = getContentResolver().openInputStream(u); ByteArrayOutputStream o = new ByteArrayOutputStream()) {
+      byte[] b = new byte[8192]; int n;
+      while ((n = in.read(b)) >= 0) o.write(b, 0, n);
+      return o.toString(StandardCharsets.UTF_8.name());
+    } catch (Exception e) { return null; }
+  }
+
+  /** 对比两份记录：按 URL 分组，输出新增 / 修改 / 移除。 */
+  private void showCompareResult(List<SourceRecord> a, List<SourceRecord> b) {
+    SourceDiff.Result diff = SourceDiff.compute(a, b);
+    Map<String, SourceRecord> mapA = diff.mapA;
+    Map<String, SourceRecord> mapB = diff.mapB;
+    List<String> added = diff.added;
+    List<String> removed = diff.removed;
+    List<String> modified = diff.modified;
+
+    StringBuilder sb = new StringBuilder();
+    sb.append("第一份 ").append(mapA.size()).append(" 条，第二份 ").append(mapB.size()).append(" 条\n");
+    if (SourceDiff.isIdentical(diff)) { sb.append("\n两份文件内容一致，无差异。"); }
+    else {
+      appendBlock(sb, "新增（第二份独有：" + added.size() + "）", added, mapB);
+      appendBlock(sb, "修改（两边都有但内容不同：" + modified.size() + "）", modified, null);
+      appendBlock(sb, "移除（第一份独有：" + removed.size() + "）", removed, mapA);
+    }
+
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString());
+    tv.setTextIsSelectable(true);
+    tv.setTextSize(13);
+    int p = dp(16);
+    tv.setPadding(p, p, p, p);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("版本对比结果")
+        .setView(sv)
+        .setNegativeButton("复制对比文本", (d, w) -> {
+          ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+          cm.setPrimaryClip(ClipData.newPlainText("书源版本对比", sb.toString()));
+          toast("对比文本已复制");
+        })
+        .setNeutralButton("并入第二份新增", (d, w) -> {
+          // 将第二份独有（新增）书源并入去重流程
+          List<SourceRecord> newOnes = new ArrayList<>();
+          for (String url : added) newOnes.add(mapB.get(url));
+          if (newOnes.isEmpty()) { toast("没有可并入的新增书源"); return; }
+          commitRecords("版本对比-新增", newOnes);
+          toast("已并入 " + newOnes.size() + " 条新增书源");
+        })
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  private void appendBlock(StringBuilder sb, String title, List<String> list, Map<String, SourceRecord> ref) {
+    if (list.isEmpty()) return;
+    sb.append("\n▶ ").append(title).append('\n');
+    int shown = Math.min(list.size(), 20);
+    for (int i = 0; i < shown; i++) {
+      String url = list.get(i);
+      String name = "";
+      if (ref != null) { SourceRecord r = ref.get(url); if (r != null) name = r.getName(); }
+      sb.append("• ").append(name.isEmpty() ? url : name).append("\n    ").append(url).append('\n');
+    }
+    if (list.size() > shown) sb.append("… 其余 ").append(list.size() - shown).append(" 条略\n");
+  }
+
+  // ================= ==== 第二批：校验历史 / 增量重验 / 质量排序 ================= ====
+
+  /** 单次校验历史记录：时间戳 + 摘要 + 失败/超时书源（供增量重验）。 */
+  private static final class CheckHistoryEntry {
+    final long ts; final String timeText; final int total, ok, fail, timeout;
+    final List<String> badUrls;
+    CheckHistoryEntry(long ts, String timeText, int total, int ok, int fail, int timeout, List<String> badUrls) {
+      this.ts = ts; this.timeText = timeText; this.total = total; this.ok = ok; this.fail = fail; this.timeout = timeout;
+      this.badUrls = badUrls == null ? new ArrayList<>() : badUrls;
+    }
+  }
+
+  /** 校验完成后记录历史（最多保留最近 20 次），持久化到 checkPrefs。 */
+  private void rememberCheckHistory(List<CheckSourceResult> results) {
+    if (results == null || results.isEmpty()) return;
+    int ok = 0, fail = 0, timeout = 0;
+    List<String> bad = new ArrayList<>();
+    for (CheckSourceResult r : results) {
+      if (r.status == CheckSourceResult.Status.SUCCESS) ok++;
+      else if (r.status == CheckSourceResult.Status.TIMEOUT) { timeout++; if (r.source.getUrl() != null) bad.add(r.source.getUrl()); }
+      else if (r.status == CheckSourceResult.Status.FAILED) { fail++; if (r.source.getUrl() != null) bad.add(r.source.getUrl()); }
+    }
+    String t = new SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new Date());
+    checkHistory.add(0, new CheckHistoryEntry(System.currentTimeMillis(), t, results.size(), ok, fail, timeout, bad));
+    while (checkHistory.size() > 20) checkHistory.remove(checkHistory.size() - 1);
+    persistCheckHistory();
+  }
+
+  /** 加载历史（内存 + prefs），在 onCreate 调用。 */
+  private void loadCheckHistory() {
+    checkHistory.clear();
+    String raw = checkPrefs().getString("checkHistory", "");
+    if (raw == null || raw.isEmpty()) return;
+    try {
+      Object root = MiniJson.parse(raw);
+      if (!(root instanceof java.util.List)) return;
+      for (Object o : (java.util.List<?>) root) {
+        if (!(o instanceof Map)) continue;
+        Map<?, ?> m = (Map<?, ?>) o;
+        long ts = m.get("ts") instanceof Number ? ((Number) m.get("ts")).longValue() : 0;
+        int total = intOf(m.get("total")), ok = intOf(m.get("ok")), fail = intOf(m.get("fail")), timeout = intOf(m.get("timeout"));
+        List<String> bad = new ArrayList<>();
+        Object b = m.get("bad");
+        if (b instanceof java.util.List) for (Object x : (java.util.List<?>) b) if (x != null) bad.add(String.valueOf(x));
+        checkHistory.add(new CheckHistoryEntry(ts,
+            new java.text.SimpleDateFormat("MM-dd HH:mm", Locale.CHINA).format(new java.util.Date(ts)),
+            total, ok, fail, timeout, bad));
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private static int intOf(Object o) { return o instanceof Number ? ((Number) o).intValue() : 0; }
+
+  private void persistCheckHistory() {
+    List<Object> list = new ArrayList<>();
+    for (CheckHistoryEntry e : checkHistory) {
+      Map<String, Object> m = new LinkedHashMap<>();
+      m.put("ts", e.ts); m.put("total", e.total); m.put("ok", e.ok); m.put("fail", e.fail); m.put("timeout", e.timeout);
+      m.put("bad", e.badUrls);
+      list.add(m);
+    }
+    checkPrefs().edit().putString("checkHistory", MiniJson.stringify(list)).apply();
+  }
+
+  /** 展示校验历史：弹窗列出历次记录，可查看详情 / 一键重验该次失败源。 */
+  private void showCheckHistory() {
+    if (checkHistory.isEmpty()) { toast("暂无校验历史"); return; }
+    List<String> lines = new ArrayList<>();
+    final java.util.List<CheckHistoryEntry> snapshot = new ArrayList<>(checkHistory);
+    for (CheckHistoryEntry e : checkHistory) {
+      lines.add(e.timeText + "  共" + e.total + " · 可用" + e.ok + " · 失败" + e.fail + " · 超时" + e.timeout);
+    }
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("校验历史（最近 " + checkHistory.size() + " 次）")
+        .setItems(lines.toArray(new String[0]), (d, w) -> {
+          CheckHistoryEntry e = snapshot.get(w);
+          List<String> opts = new ArrayList<>();
+          opts.add("查看该次失败源明细");
+          if (!e.badUrls.isEmpty()) opts.add("重验该次失败/超时源（" + e.badUrls.size() + " 条）");
+          opts.add("查看该次可用源最快/最慢");
+          opts.add("取消");
+          new MaterialAlertDialogBuilder(this)
+              .setTitle("第 " + (w + 1) + " 次校验")
+              .setItems(opts.toArray(new String[0]), (d2, w2) -> {
+                if (w2 == 0) showHistoryBadDetail(e);
+                else if (w2 == 1) recheckUrls(e.badUrls, "该次失败源");
+                else if (w2 == 2) showHistorySpeed(e);
+              })
+              .show();
+        })
+        .setNegativeButton("清空历史", (d, w) -> {
+          checkHistory.clear(); persistCheckHistory(); toast("已清空校验历史");
+        })
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  private void showHistoryBadDetail(CheckHistoryEntry e) {
+    if (e.badUrls.isEmpty()) { toast("该次无失败/超时源"); return; }
+    StringBuilder sb = new StringBuilder("失败/超时 " + e.badUrls.size() + " 条\n");
+    int shown = 0;
+    for (String u : e.badUrls) { if (shown >= 100) break; shown++; sb.append("• ").append(u).append('\n'); }
+    if (e.badUrls.size() > shown) sb.append("… 其余 ").append(e.badUrls.size() - shown).append(" 条略\n");
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString()); tv.setTextSize(13); tv.setTextIsSelectable(true);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this).setTitle("失败源明细").setView(sv).setPositiveButton("关闭", null).show();
+  }
+
+  private void showHistorySpeed(CheckHistoryEntry e) {
+    if (checkResults.isEmpty()) { toast("当前无校验结果可展示"); return; }
+    List<CheckSourceResult> sorted = new ArrayList<>(checkResults);
+    sorted.sort((a, b) -> Long.compare(a.respondTimeMs, b.respondTimeMs));
+    StringBuilder sb = new StringBuilder();
+    sb.append("最快 ").append(sorted.size()).append(" 个可用源：\n");
+    int n = 0;
+    for (CheckSourceResult r : sorted) {
+      if (!r.isUsable()) continue;
+      if (n >= 10) break; n++;
+      sb.append("• ").append(r.source.getName()).append("  ").append(r.respondTimeMs).append("ms\n");
+    }
+    if (n == 0) sb.append("（无可用源）\n");
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString()); tv.setTextSize(13); tv.setTextIsSelectable(true);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this).setTitle("快源排序").setView(sv).setPositiveButton("关闭", null).show();
+  }
+
+  /** 一键重验上次本次失败/超时源。 */
+  private void recheckFailedSources() {
+    if (result == null || result.getRetained().isEmpty()) { toast("请先解析书源再进行重验"); return; }
+    // 用最近一次校验的失败源
+    List<String> badUrls = null;
+    for (CheckHistoryEntry e : checkHistory) if (!e.badUrls.isEmpty()) { badUrls = e.badUrls; break; }
+    if (badUrls == null) { toast("历史上没有失败/超时源可重验"); return; }
+    recheckUrls(badUrls, "最近失败源");
+  }
+
+  private void recheckUrls(List<String> urls, String label) {
+    if (result == null || result.getRetained().isEmpty()) { toast("请先解析书源"); return; }
+    java.util.Set<String> badSet = new HashSet<>(urls);
+    List<SourceRecord> targets = new ArrayList<>();
+    for (SourceRecord s : result.getRetained()) {
+      if (s.getUrl() != null && badSet.contains(s.getUrl())) targets.add(s);
+    }
+    if (targets.isEmpty()) { toast("这些失败源已不在当前结果中，无需重验"); return; }
+    toast("开始增量重验 " + targets.size() + " 条失败源…");
+    runCheck(checkSettings, targets);
+  }
+
+  // ================= ==== 第二批：去重规则预设 ================= ====
+
+  private final List<Map<String, Object>> dedupePresets = new ArrayList<>();
+
+  private void loadDedupePresets() {
+    dedupePresets.clear();
+    String raw = checkPrefs().getString("dedupePresets", "");
+    if (raw == null || raw.isEmpty()) return;
+    try {
+      Object root = MiniJson.parse(raw);
+      if (!(root instanceof java.util.List)) return;
+      for (Object o : (java.util.List<?>) root) if (o instanceof Map) dedupePresets.add((Map<String, Object>) o);
+    } catch (Exception ignored) {}
+  }
+
+  private void persistDedupePresets() { checkPrefs().edit().putString("dedupePresets", MiniJson.stringify(dedupePresets)).apply(); }
+
+  private void showDedupePresetMenu() {
+    loadDedupePresets();
+    List<String> opts = new ArrayList<>();
+    opts.add("保存当前规则为新预设");
+    List<String> presetNames = new ArrayList<>();
+    for (Map<String, Object> p : dedupePresets) { opts.add("套用预设：" + p.get("name")); presetNames.add(String.valueOf(p.get("name"))); }
+    opts.add("管理预设（删除）");
+    opts.add("取消");
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("去重规则预设")
+        .setMessage("预设 = 去重模式 + 清理名称 + 并发数。当前：" + mode.label()
+            + " · 清理" + (cleanNames ? "开" : "关") + " · 并发" + concurrency)
+        .setItems(opts.toArray(new String[0]), (d, w) -> {
+          if (w == 0) saveCurrentPresetDialog();
+          else if (w > 0 && w <= dedupePresets.size()) applyPreset(dedupePresets.get(w - 1));
+          else if (w == dedupePresets.size() + 1) managePresets();
+        })
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  private void saveCurrentPresetDialog() {
+    final android.widget.EditText et = new android.widget.EditText(this);
+    et.setHint("预设名称，例如：小说合集");
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("保存当前规则为新预设")
+        .setMessage("模式：" + mode.label() + " · 清理" + (cleanNames ? "开" : "关") + " · 并发" + concurrency)
+        .setView(et)
+        .setPositiveButton("保存", (d, w) -> {
+          String name = et.getText() == null ? "" : et.getText().toString().trim();
+          if (name.isEmpty()) { toast("预设名称不能为空"); return; }
+          loadDedupePresets();
+          Map<String, Object> p = new LinkedHashMap<>();
+          p.put("name", name);
+          p.put("mode", mode.name());
+          p.put("clean", cleanNames);
+          p.put("concurrency", concurrency);
+          // 同名覆盖
+          for (int i = 0; i < dedupePresets.size(); i++) {
+            if (name.equals(String.valueOf(dedupePresets.get(i).get("name")))) { dedupePresets.set(i, p); persistDedupePresets(); toast("预设已更新：" + name); return; }
+          }
+          dedupePresets.add(p); persistDedupePresets(); toast("已保存预设：" + name);
+        })
+        .setNegativeButton("取消", null)
+        .show();
+  }
+
+  private void applyPreset(Map<String, Object> p) {
+    try {
+      String modeName = String.valueOf(p.get("mode"));
+      DedupeMode m = DedupeMode.STANDARD;
+      if (DedupeMode.STRICT.name().equals(modeName)) m = DedupeMode.STRICT;
+      else if (DedupeMode.AGGRESSIVE.name().equals(modeName)) m = DedupeMode.AGGRESSIVE;
+      mode = m;
+      operationMode.select(m);
+      int checkId = m == DedupeMode.STRICT ? R.id.modeStrict : (m == DedupeMode.AGGRESSIVE ? R.id.modeAggressive : R.id.modeStandard);
+      if (modeGroup != null) modeGroup.check(checkId);
+      boolean clean = p.get("clean") instanceof Boolean ? (Boolean) p.get("clean") : Boolean.parseBoolean(String.valueOf(p.get("clean")));
+      cleanNames = clean;
+      if (switchCleanNames != null) switchCleanNames.setChecked(clean);
+      if (p.get("concurrency") instanceof Number) {
+        int c = Math.max(1, Math.min(5, ((Number) p.get("concurrency")).intValue()));
+        concurrency = c;
+        if (sliderConcurrency != null) sliderConcurrency.setValue(c);
+      }
+      savePrefs();
+      if (result != null) recompute(partial);
+      toast("已套用预设：" + p.get("name"));
+    } catch (Exception e) { toast("套用预设失败：" + e.getMessage()); }
+  }
+
+  private void managePresets() {
+    loadDedupePresets();
+    if (dedupePresets.isEmpty()) { toast("暂无预设"); return; }
+    List<String> lines = new ArrayList<>();
+    for (Map<String, Object> p : dedupePresets) lines.add(String.valueOf(p.get("name")));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("管理预设（点击删除）")
+        .setItems(lines.toArray(new String[0]), (d, w) -> {
+          dedupePresets.remove(w); persistDedupePresets(); toast("已删除预设");
+        })
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  // ============= 第二批：变更差异对比报告 =============
+
+  /** 生成去重/合并后的「本次变更说明」并弹窗，可复制/导出。 */
+  private void showChangeReport() {
+    if (result == null) { toast("尚无去重结果，无法生成变更报告"); return; }
+    DedupeResult r = result;
+    int original = r.getOriginalCount();
+    int kept = r.getRetained().size();
+    int removed = r.getDuplicateCount();
+    int invalid = r.getInvalid().size();
+    StringBuilder sb = new StringBuilder();
+    sb.append("去重模式：").append(mode.label()).append('\n');
+    sb.append("本次输入原始书源 ").append(original).append(" 条\n");
+    sb.append("· 保留（可用基础）：").append(kept).append(" 条\n");
+    sb.append("· 判定重复而移除：").append(removed).append(" 条\n");
+    sb.append("· 无效（缺URL/非法URL）：").append(invalid).append(" 条\n");
+    int net = original - removed - invalid;
+    sb.append("\n净变化：原始 ").append(original).append(" → 保留 ").append(kept).append("（约精简 ")
+        .append(Math.max(0, original - kept)).append(" 条重复）\n");
+    // 校验结果补充
+    if (!checkResults.isEmpty()) {
+      int ok = 0, fail = 0, timeout = 0;
+      for (CheckSourceResult c : checkResults) {
+        if (c.status == CheckSourceResult.Status.SUCCESS) ok++;
+        else if (c.status == CheckSourceResult.Status.TIMEOUT) timeout++;
+        else if (c.status == CheckSourceResult.Status.FAILED) fail++;
+      }
+      sb.append("\n最新校验：可用 ").append(ok).append(" · 失败 ").append(fail).append(" · 超时 ").append(timeout).append("（共 ")
+          .append(checkResults.size()).append(" 条）\n");
+    }
+    sb.append("\n生成时间：").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString()); tv.setTextSize(14); tv.setTextIsSelectable(true);
+    int p = dp(16); tv.setPadding(p, p, p, p); sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("变更差异对比报告")
+        .setView(sv)
+        .setNegativeButton("复制报告", (d, w) -> {
+          ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+          cm.setPrimaryClip(ClipData.newPlainText("书源变更报告", sb.toString()));
+          toast("报告已复制");
+        })
+        .setNeutralButton("导出为 JSON 文件", (d, w) -> {
+          // 生成一个包含统计信息的 JSON 报告文件
+          Map<String, Object> rep = new LinkedHashMap<>();
+          rep.put("mode", mode.label());
+          rep.put("originalCount", original);
+          rep.put("kept", kept);
+          rep.put("removedDuplicate", removed);
+          rep.put("invalid", invalid);
+          rep.put("generatedAt", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
+          pendingSave = MiniJson.stringify(rep);
+          String date = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
+          createDoc.launch("变更报告_" + date + ".json");
+        })
+        .setPositiveButton("关闭", null)
+        .show();
   }
 }

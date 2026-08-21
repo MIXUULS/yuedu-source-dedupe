@@ -18,8 +18,8 @@ android {
         applicationId = "com.mina.yuedu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 306
-        versionName = "3.3.0"
+        versionCode = 307
+        versionName = "3.4.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -69,5 +69,7 @@ dependencies {
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.coordinatorlayout:coordinatorlayout:1.2.0")
     implementation("androidx.webkit:webkit:1.12.1")
+    // 二维码生成（生成分享书源的二维码，仅用 core，无 Android UI 依赖）
+    implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
 }

@@ -1,15 +1,15 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.3.0-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.4.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
 </p>
 
-<p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 导入</p>
+<p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 分享 · 导入</p>
 
 > 本仓库为 **社区维护版**，基于 [Mina-kk/yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe) 二次开发。
-> 感谢原作者 ❤️
+> 功能持续增强，感谢原作者 ❤️
 
 ---
 
@@ -17,13 +17,14 @@
 
 | 类别 | 功能 |
 |---|---|
-| 🔄 **去重** | 标准 / 严格 / 激进三种模式，支持 `#标签` 区分同站不同源 |
-| 🔍 **校验** | 搜索 → 发现 → 详情 → 目录 → 正文，失败原因统计，明细筛选排序 |
-| 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示 |
+| 🔄 **去重** | 标准 / 严格 / 激进三种模式，支持 `#标签` 区分同站不同源，规则可存为预设 |
+| 🔍 **校验** | 搜索 → 发现 → 详情 → 目录 → 正文，失败原因统计，明细筛选排序，历史记录，增量重验失败源 |
+| 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示，工具功能按分组卡片整理 |
 | 🔗 **网络** | 自动直连→代理回退（网络异常 + 内容污染），同域串行下载 |
-| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出 |
-| 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择 |
-| 💾 **持久化** | 状态记忆、URL 历史、自动恢复上次配置 |
+| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出、多选批量操作、质量快源排序 |
+| 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择、变更差异报告 |
+| 💾 **持久化** | 状态记忆、URL 历史、自动恢复上次配置、设置一键备份/还原 |
+| 📤 **分享** | 分享文本 / JSON 文件 / 二维码 / 自用分享链接，从剪贴板导入书源，自动分类标签 |
 
 ## 🚀 快速开始
 
@@ -37,9 +38,22 @@
 
 [📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
-当前版本：**v3.3.0**（versionCode 306）· 正式签名发布版
+当前版本：**v3.4.0**（versionCode 307）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.4.0
+
+- 书源分享：复制文本 / 保存 JSON / 二维码 / 自用分享链接
+- 从剪贴板导入书源文本
+- 设置一键备份 / 还原
+- 版本对比（两份书源文件）：新增 / 修改 / 移除，可并入新增
+- 校验历史记录 + 增量重验失败源 + 快源排序
+- 去重规则预设（模式 + 清理 + 并发）
+- 变更差异报告（可复制 / 导出 JSON）
+- 校验结果多选批量：导出选中 / 复制选中 / 移除选中
+- 导出自动附加分类标签
+- 工具功能分组卡片整理界面
 
 ### v3.3.0
 

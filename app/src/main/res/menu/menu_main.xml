@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+    <item
+        android:id="@+id/action_history"
+        android:title="校验历史"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_recheck"
+        android:title="重验失败"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_preset"
+        android:title="去重预设"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_backup"
+        android:title="设置备份"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_compare"
+        android:title="版本对比"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_report"
+        android:title="变更报告"
+        app:showAsAction="never" />
+    <item
+        android:id="@+id/action_about"
+        android:title="关于"
+        app:showAsAction="never" />
+</menu>
