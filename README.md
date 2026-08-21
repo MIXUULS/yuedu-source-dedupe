@@ -1,7 +1,7 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.2.0-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.3.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
 </p>
@@ -37,9 +37,16 @@
 
 [📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
-当前版本：**v3.2.0**（versionCode 305）· 正式签名发布版
+当前版本：**v3.3.0**（versionCode 306）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.3.0
+
+- 校验结果搜索（实时过滤名称/URL）
+- 快速校验模式（只跑搜索+详情两步，速度翻倍）
+- 导出 CSV（可在电脑上打开筛选）
+- 阅读分支选择（带图标显示包名，每次自由选择）
 
 ### v3.2.0
 
