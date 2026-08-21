@@ -1,226 +1,133 @@
-# 阅读书源去重
+# 📚 阅读书源去重
 
-用于整理、去重和校验阅读书源 JSON 的 Android 应用。
+<p align="center">
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.2.0-blue.svg" alt="版本"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
+</p>
 
-> 本仓库为 **社区维护版（v3.1.0）**，由 MIXUULS 基于
-> [Mina-kk/yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe) 二次开发：
-> 修复了多项稳定性问题（OOM 闪退、并发、生命周期等），并新增若干功能，详见 [3.1.0 更新](#310-更新本版)。
-> **感谢原作者 [Mina-kk](https://github.com/Mina-kk) 的开源贡献。**
+<p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 导入</p>
 
-## 3.2.0 更新（本版）
+> 本仓库为 **社区维护版**，基于 [Mina-kk/yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe) 二次开发。
+> 感谢原作者 ❤️
 
-### 修复的 Bug
+---
 
-- **大书源包（万级 / 数十 MB）解析、导出、本地导入的内存溢出（OOM）与闪退**：
-  开启 `largeHeap`、消除重复的内存拷贝、解析串行化（下载并发、解析同一时刻只有一个），
-  解决"导入超 1 万条闪退""导出 100% 闪退""被系统 o-stop 杀进程"等问题。
-- **校验"发现页"误判**：有 `ruleExplore` 规则的书源不再因网络探测失败被判"发现失效"。
-- **本地导入阻塞主线程**：读文件与 JSON 解析移至后台线程，避免大文件 ANR。
-- **多线程 order 竞争**：并发导入时书源顺序号统一加锁分配，去重择优稳定。
-- **Activity 生命周期泄漏**：退出/旋转屏幕时自动停止后台任务，回调加销毁防护。
-- **网络下载 body 重复解析**：下载后只解析一次。
-- **校验超限误判**：响应超过上限直接报失败，不再截断半页误判；下载上限放宽到 64MB。
-- **YCK 页面资源过度拦截**：仅拦截非 YCK 域且非静态资源（图片/字体/css/js）的请求。
-- **MiniJson 边界**：`\u` 转义越界、超大整数导致整包解析失败等问题。
-- **URL 模板误判**：普通 URL 中的 `,{` 不再被误当 POST 选项截断。
-- **每源新建线程池**：校验改为共享线程池，万级校验开销大幅下降。
-- 移除未使用的依赖库（okhttp / coroutines / lifecycle），APK 更小。
+## ✨ 功能
 
-### 新增功能
+| 类别 | 功能 |
+|---|---|
+| 🔄 **去重** | 标准 / 严格 / 激进三种模式，支持 `#标签` 区分同站不同源 |
+| 🔍 **校验** | 搜索 → 发现 → 详情 → 目录 → 正文，失败原因统计，明细筛选排序 |
+| 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示 |
+| 🔗 **网络** | 自动直连→代理回退（网络异常 + 内容污染），同域串行下载 |
+| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出 |
+| 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择 |
+| 💾 **持久化** | 状态记忆、URL 历史、自动恢复上次配置 |
 
-- **深色模式**：跟随系统夜间模式自动切换。
-- **网络自动代理回退**：先直连，失败（网络异常或 DNS 污染返回错误内容）自动走系统代理，
-  无需手动判断哪些源需要梯子；支持 Clash 等"系统代理"模式。
-- **下载进度实时显示**：并发数、已下载大小、下载速度（MB/s）。
-- **状态记忆**：URL 输入、去重模式、开关、并发数自动保存恢复。
-- **URL 历史**：最近 10 条地址一键选择，可清空。
-- **重复明细**：点击"重复"统计卡片查看每个重复组保留了哪个、合并了哪些。
-- **校验结果**：失败原因 Top 统计 + "校验明细"按状态筛选、按耗时排序。
-- **关于页**：点击标题栏查看版本号与项目地址。
-- **正式签名**：release 使用独立 keystore 构建，可覆盖升级与分发。
+## 🚀 快速开始
 
-### 3.2.0 新增
+1. 选择本地 JSON 文件，或输入网络 JSON / YCK 地址
+2. 选择去重模式和并发数
+3. 点击「解析网络源」
+4. 可选：点击「校验源是否可用」检测书源连通性
+5. 保存结果，或「导入阅读」到手机上的阅读 App
 
-- **同域串行下载**：FetchManager 按域名分组，同域串行、异域并发，避免同一域名被服务器封。
-- **合并同域校验结果**：校验完成后，同域名书源的各步骤（搜索/发现/详情/目录/正文）取并集——
-  A1搜索失败+A2发现失败→合并后搜索+发现都成功，点"合并同域校验结果"按钮查看。
-- **分类导出**：校验后按"可用/不可用/非HTTP"分类导出为独立 JSON 文件，一键分离有效源。
-- **自定义可用状态码**：校验对话框新增"可用状态码"输入框，默认 `200-399`，可自定义如 `200,403,500-502`。
-- **阅读分支选择**：导入阅读时，检测手机上安装的多个阅读分支（legado/legado3 等），弹出选择框。
-- **校验内容级代理回退**：校验每个步骤自动先直连，若拿到内容但不正确（被墙/DNS 污染），
-  自动走系统代理重试一次——全自动，无需手动判断哪些源需要梯子。
-- **编译编码修正**：修复因编译编码问题导致的中文乱码（合并同域结果、校验明细等显示正常）。
+## 📦 下载
 
-### 注意事项
+[📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
-- **签名文件**（`keystore/`）不会提交到仓库：`debug.keystore` 按下方构建说明生成；
-  `release.keystore` 请使用你自己的密钥并**务必妥善备份**，丢失后已发布的 release 无法再升级。
-- **代理行为**：直连优先，失败自动走系统代理；若使用规则模式代理（如 Clash），建议开启
-  "系统代理"开关，国内源直连、被墙源走代理，全自动无需手动切换。
-- **大小限制**：单文件导入/下载上限 64MB，单次解析上限约 2500 万字符，超大合集请分批导入。
-- **签名区别**：debug 版与 release 版签名不同，两者不能互相覆盖安装；同一签名版本可覆盖升级。
-- **校验限制**：使用真实 HTTP 请求与内容探测，未实现与阅读一致的 JS/CSS/XPath 规则执行，
-  复杂动态规则可能误判（同上游）。
+当前版本：**v3.2.0**（versionCode 305）· 正式签名发布版
 
-## 3.0.1-md3 更新（上游）
+## 📝 更新日志
 
-### 书源校验
+### v3.2.0
 
-- 校验对话框可填写搜索关键词，默认「我的」。
-- 超时、并发、关键词和校验勾选会记住；可用「重置默认」恢复。
-- 按书源类型判断小说、漫画、视频、音频和文件，并按类型做内容探测。
-- 检验对话框可选择要校验的类型。
-- 结果区显示去重和校验统计，并用开关选择导入或保存的类型。
-- 内容失败原因按类型区分：正文失效、图片失效、播放失效、音频失效、下载失效。
+- 同域串行下载、合并同域校验结果
+- 分类导出（可用/不可用/非HTTP）
+- 自定义可用状态码、快速校验模式
+- 阅读分支选择（带图标显示）
+- 校验内容级代理回退（全自动）
+- 校验结果搜索、导出 CSV
+- 修复中文编码乱码
 
-### 导入阅读
+### v3.1.0
 
-- 导入和保存只处理结果区已打开的类型。
-- 仍可启用「仅导出可用源」。
-- 继续打开阅读的书源批量选择界面，不直接写入阅读书源数据库。
+- 修复大书源包 OOM 闪退、ANR、生命周期泄漏
+- 深色模式、自动代理回退、下载进度
+- 状态记忆、URL 历史、重复明细
+- 校验筛选排序、关于页
 
-详细说明见 [docs/CHECK_SOURCE.md](docs/CHECK_SOURCE.md)。
+<details>
+<summary>📜 上游版本历史（3.0.1-md3 / 3.0.0-md3）</summary>
 
-## 3.0.0-md3 更新
+**3.0.1-md3**
+- 多轮校验探测、按同域同类型保留最快可用源
+- 校验并发 1–500、同域串行下载+短间隔重试
+- 阅读分支选择、检验耗时独立显示
 
-### 工程与界面
+**3.0.0-md3**
+- 重构为 Material 3 界面
+- 标准/严格/激进三种去重模式
+- 支持 `#标签` 身份标签
+- YCK 页面支持、校验五阶段
 
-- 重构为标准 Android Gradle 工程。
-- 界面更新为 Material 3。
-- 包名保持为 `com.mina.yuedu`。
-- 去重和校验任务在切换页面后可继续运行，并显示任务进度。
+</details>
 
-### 去重
+## 🔧 从源码构建
 
-- 提供标准、严格、激进三种去重模式。
-- 修复 URL 尾斜杠、默认端口、查询参数和常见跟踪参数的处理。
-- 支持 `#简体`、`#大改`、`#🎃` 等书源身份标签。
-- 标准和严格模式保留身份标签；激进模式按站点合并。
-- 网络请求只使用身份标签前的实际地址。
-- 切换去重模式或名称清理选项后重新计算结果。
-
-### 文件与网络导入
-
-- 支持选择一个或多个本地 JSON 文件。
-- 支持输入网络 JSON 或 YCK 地址。
-- 兼容数组、`data`、`list`、`sources` 包装及单个书源对象。
-- 支持重定向、gzip 响应和下载大小限制。
-- 网络地址直接请求，不使用额外代理。
-
-### YCK
-
-- 支持主站、备用站和发布页入口切换。
-- 新增无缓存刷新。
-- 支持从页面收集书源地址并添加到去重工具。
-
-### 书源校验
-
-- 新增搜索、发现、详情、目录和正文阶段校验。
-- 默认超时为 180 秒。
-- 校验并发范围为 **1–100**，默认 8。
-- 支持停止校验并取消活动连接。
-- 支持按失败原因查看结果。
-- 支持仅导出校验可用的书源。
-
-### 导入阅读
-
-- “导入阅读”会打开阅读的书源批量选择界面。
-- 由用户勾选并确认需要导入的书源。
-- 不直接写入阅读的书源数据库。
-- 使用一次性本机地址传递批量 JSON，避免 Intent 数据过大。
-
-## 使用方法
-
-1. 选择本地 JSON 文件，或输入网络 JSON/YCK 地址。
-2. 选择去重模式和网络下载并发数。
-3. 开始解析并检查重复、有效和错误数量。
-4. 如需检查可用性，打开“校验源是否可用”并设置校验阶段、超时、并发数和搜索关键词。
-5. 在结果区选择要保留的书源类型。
-6. 保存结果，或点击“导入阅读”后在阅读中选择并确认。
-
-## 下载
-
-APK 发布在本仓库的 [Releases](https://github.com/MIXUULS/yuedu-source-dedupe/releases) 页面。
-
-当前版本：**v3.2.0**（versionCode 305）
-
-```text
-文件：app-release.apk
-类型：正式签名发布版（安装与分发）
-```
-
-> 安装第三方 APK 前，请自行核对发布页提供的 SHA-256 摘要。
-
-## 从源码构建
-
-要求：
-
-- JDK 17
-- Android SDK Platform 35
-
-> 项目使用 `keystore/debug.keystore`（debug 签名）打包，仓库未包含该文件。
-> 首次构建前请生成（密码均为 `android`）：
->
-> ```bash
-> keytool -genkeypair -v -keystore keystore/debug.keystore -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -dname "CN=Android Debug,O=Android,C=US"
-> ```
+**要求：** JDK 17 + Android SDK Platform 35
 
 ```bash
+# 1. 生成 debug 签名（密码 android）
+keytool -genkeypair -v -keystore keystore/debug.keystore \
+  -alias androiddebugkey -keyalg RSA -keysize 2048 \
+  -validity 10000 -storepass android -keypass android \
+  -dname "CN=Android Debug,O=Android,C=US"
+
+# 2. 构建调试版
 ./gradlew :app:testDebugUnitTest :app:assembleDebug
+
+# 产物：app/build/outputs/apk/debug/app-debug.apk
 ```
 
-生成的调试 APK：
+> 发布版构建见 [构建说明](#构建发布版release)
 
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
-
-### 构建发布版（release）
-
-release 使用独立的 `keystore/release.keystore` 签名（仓库不包含、也不会提交该文件），
-请使用你自己的密钥生成（自行妥善保管密码，丢失后已发布的 release 无法再升级）：
+<details>
+<summary>📦 构建发布版（release）</summary>
 
 ```bash
-keytool -genkeypair -v -keystore keystore/release.keystore -alias yuedu -keyalg RSA -keysize 2048 -validity 10000 -storepass <你的密码> -keypass <你的密码> -dname "CN=YueduDedupe,O=You,C=CN"
-```
+# 生成正式签名
+keytool -genkeypair -v -keystore keystore/release.keystore \
+  -alias yuedu -keyalg RSA -keysize 2048 -validity 10000 \
+  -storepass <你的密码> -keypass <你的密码> \
+  -dname "CN=YueduDedupe,O=You,C=CN"
 
-并在项目根目录的 `local.properties`（该文件已被 `.gitignore` 排除，不会提交）中配置你的密码：
+# 在 local.properties 中配置密码（该文件不提交）
+#   releaseStorePassword=你的密码
+#   releaseKeyPassword=你的密码
+#   releaseKeyAlias=yuedu
 
-```properties
-releaseStorePassword=你的密码
-releaseKeyPassword=你的密码
-releaseKeyAlias=yuedu
-```
-
-然后构建：
-
-```bash
+# 构建发布版
 ./gradlew :app:assembleRelease
+
+# 产物：app/build/outputs/apk/release/app-release.apk
 ```
 
-产物：`app/build/outputs/apk/release/app-release.apk`
+</details>
 
-## 测试
+## ⚠️ 注意
 
-当前 JVM 测试覆盖：
+- 签名文件（`keystore/`）不会提交到仓库，**请自行备份 release.keystore**
+- debug 与 release 签名不同，不能互相覆盖安装
+- 网络请求：直连优先 → 失败自动走系统代理，无需手动切换
+- 单文件导入上限 64MB，超大合集请分批
 
-- URL 身份标签和去重模式。
-- 一次性本机 JSON 服务。
-- 校验并发 1–100 的边界归一化。
-- 搜索关键词空白回退和自定义保留。
-- 书源类型判断和内容探测。
+## 🙏 致谢
 
-最终构建中 22 项 JVM 测试全部通过。
+- 原作者 [Mina-kk](https://github.com/Mina-kk) 及 [yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe)
+- 所有使用与反馈的用户
 
-## 当前限制
+## 📄 许可证
 
-当前校验使用真实 HTTP 请求和返回内容探测，但尚未实现与阅读 WebBook 完全一致的 Rhino JavaScript、CSS 和 XPath 规则执行。复杂动态规则可能出现误判。
-
-## 致谢
-
-- 原作者 [Mina-kk](https://github.com/Mina-kk) 及其 [yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe) 项目
-- 所有使用、测试并反馈问题的用户
-
-## 许可证
-
-本项目采用 [MIT License](LICENSE)。
+[MIT License](LICENSE)
