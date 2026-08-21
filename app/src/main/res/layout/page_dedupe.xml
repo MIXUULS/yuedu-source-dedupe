@@ -271,6 +271,26 @@
                     android:textSize="13sp"
                     android:visibility="gone" />
 
+                <com.google.android.material.textfield.TextInputLayout
+                    android:id="@+id/tilCheckSearch"
+                    style="@style/Widget.Material3.TextInputLayout.FilledBox"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="8dp"
+                    android:hint="搜索名称或URL"
+                    android:visibility="gone"
+                    app:boxBackgroundMode="filled"
+                    app:endIconMode="clear_text">
+
+                    <com.google.android.material.textfield.TextInputEditText
+                        android:id="@+id/etCheckSearch"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:importantForAutofill="no"
+                        android:inputType="text"
+                        android:maxLines="1" />
+                </com.google.android.material.textfield.TextInputLayout>
+
                 <LinearLayout
                     android:id="@+id/rowCheckTiles"
                     android:layout_width="match_parent"
@@ -445,6 +465,15 @@
                         android:layout_marginStart="4dp"
                         android:text="非HTTP" />
                 </LinearLayout>
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnExportCsv"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginTop="4dp"
+                    android:text="导出 CSV（可在电脑打开）"
+                    android:visibility="gone" />
 
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnMergeDomain"

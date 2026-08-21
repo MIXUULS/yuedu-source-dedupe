@@ -22,6 +22,8 @@ public final class CheckSourceSettings {
   public boolean checkFile = true;
   /** 可用 HTTP 状态码区间，如 "200-399" 或 "200,403,500-502"。 */
   public String okStatusRanges = DEFAULT_OK_STATUS;
+  /** 快速模式：只跑搜索+详情两步，跳过发现/目录/正文。 */
+  public boolean quickMode = false;
 
   public void resetToDefaults() {
     timeoutSeconds = DEFAULT_TIMEOUT;

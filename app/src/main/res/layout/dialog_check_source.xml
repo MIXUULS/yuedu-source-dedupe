@@ -108,6 +108,13 @@
             android:checked="true"
             android:text="@string/source_tab_content" />
 
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/cbQuickMode"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="4dp"
+            android:text="快速模式（只跑搜索+详情，跳过发现/目录/正文）" />
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/tilCheckKeyword"
             style="@style/Widget.Material3.TextInputLayout.FilledBox"

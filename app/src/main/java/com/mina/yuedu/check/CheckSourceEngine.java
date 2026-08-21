@@ -276,7 +276,7 @@ public final class CheckSourceEngine {
     }
     if (Thread.currentThread().isInterrupted()) return bad;
 
-    if (settings.checkDiscovery) {
+    if (settings.checkDiscovery && !settings.quickMode) {
       String explore = source.rawString("exploreUrl");
       Object ruleExplore = source.getRaw().get("ruleExplore");
       if (explore != null && !explore.trim().isEmpty()) {
@@ -351,7 +351,7 @@ public final class CheckSourceEngine {
     }
     if (Thread.currentThread().isInterrupted()) return bad;
 
-    if (settings.checkCategory) {
+    if (settings.checkCategory && !settings.quickMode) {
       if (!ResultInspect.hasRule(ruleToc) && tocUrl == null) {
         bad.add("目录失效");
       } else if (tocUrl != null) {
@@ -373,7 +373,7 @@ public final class CheckSourceEngine {
     }
     if (Thread.currentThread().isInterrupted()) return bad;
 
-    if (settings.checkContent) {
+    if (settings.checkContent && !settings.quickMode) {
       String contentFail = kind.contentFailGroup();
       if (!ResultInspect.hasRule(ruleContent) && chapterUrl == null) {
         bad.add(contentFail);

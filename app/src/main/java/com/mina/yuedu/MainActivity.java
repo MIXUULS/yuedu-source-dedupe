@@ -52,7 +52,11 @@ public class MainActivity extends AppCompatActivity {
   private TextInputEditText etUrls;
   private TextView tvLocalStatus, tvModeDesc, tvProgress, tvStatus, tvStats, tvCheckStats;
   private TextView tvFailReasons;
-  private MaterialButton btnCheckDetail, btnUrlHistory, btnExportOk, btnExportBad, btnExportSkip, btnMergeDomain;
+  private MaterialButton btnCheckDetail, btnUrlHistory, btnExportOk, btnExportBad, btnExportSkip, btnMergeDomain, btnExportCsv;
+  private TextInputLayout tilCheckSearch;
+  private TextInputEditText etCheckSearch;
+  /** 搜索过滤后的校验结果列表，null 表示不使用过滤。 */
+  private List<CheckSourceResult> filteredCheckResults;
   private View cardRunning, cardResult;
   private LinearLayout boxKindExport, rowCheckTiles;
   private TextView tvExportPreview;
@@ -86,7 +90,7 @@ public class MainActivity extends AppCompatActivity {
   private boolean yckLoaded, yckAutoFellBack;
 
   private ActivityResultLauncher<String[]> openDocs;
-  private ActivityResultLauncher<String> createDoc;
+  private ActivityResultLauncher<String> createDoc, csvDoc;
 
   @Override protected void onCreate(@Nullable Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
@@ -141,6 +145,13 @@ public class MainActivity extends AppCompatActivity {
         o.write(pendingSave.getBytes(StandardCharsets.UTF_8));
         toast("已保存");
       } catch (Exception e) { toast("保存失败：" + e.getMessage()); }
+    });
+    csvDoc = registerForActivityResult(new ActivityResultContracts.CreateDocument("text/csv"), uri -> {
+      if (uri == null || pendingSave == null) return;
+      try (OutputStream o = getContentResolver().openOutputStream(uri)) {
+        o.write(pendingSave.getBytes(StandardCharsets.UTF_8));
+        toast("已导出 CSV");
+      } catch (Exception e) { toast("导出失败：" + e.getMessage()); }
     });
 
     updateModeDesc();
@@ -223,10 +234,23 @@ public class MainActivity extends AppCompatActivity {
     btnExportBad = root.findViewById(R.id.btnExportBad);
     btnExportSkip = root.findViewById(R.id.btnExportSkip);
     btnMergeDomain = root.findViewById(R.id.btnMergeDomain);
+    btnExportCsv = root.findViewById(R.id.btnExportCsv);
     btnExportOk.setOnClickListener(v -> exportByCategory("可用"));
     btnExportBad.setOnClickListener(v -> exportByCategory("不可用"));
     btnExportSkip.setOnClickListener(v -> exportByCategory("非HTTP"));
     btnMergeDomain.setOnClickListener(v -> showMergeDomain());
+    btnExportCsv.setOnClickListener(v -> exportCsv());
+    tilCheckSearch = root.findViewById(R.id.tilCheckSearch);
+    etCheckSearch = root.findViewById(R.id.etCheckSearch);
+    if (etCheckSearch != null) {
+      etCheckSearch.addTextChangedListener(new android.text.TextWatcher() {
+        @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+        @Override public void onTextChanged(CharSequence s, int start, int before, int count) {
+          applyCheckSearch(s == null ? "" : s.toString().trim());
+        }
+        @Override public void afterTextChanged(android.text.Editable s) {}
+      });
+    }
 
     root.findViewById(R.id.btnChooseJson).setOnClickListener(v -> openDocs.launch(new String[]{"application/json", "text/*", "*/*"}));
     root.findViewById(R.id.btnClear).setOnClickListener(v -> clearAll());
@@ -608,6 +632,7 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.concurrency = p.getInt("concurrency", CheckSourceSettings.DEFAULT_CONCURRENCY);
     checkSettings.keyword = p.getString("keyword", CheckSourceSettings.DEFAULT_KEYWORD);
     checkSettings.okStatusRanges = p.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS);
+    checkSettings.quickMode = p.getBoolean("quickMode", false);
     checkSettings.checkSearch = p.getBoolean("search", true);
     checkSettings.checkDiscovery = p.getBoolean("discovery", true);
     checkSettings.checkInfo = p.getBoolean("info", true);
@@ -628,6 +653,7 @@ public class MainActivity extends AppCompatActivity {
         .putInt("concurrency", checkSettings.concurrency)
         .putString("keyword", checkSettings.keyword)
         .putString("okStatus", checkSettings.okStatusRanges)
+        .putBoolean("quickMode", checkSettings.quickMode)
         .putBoolean("search", checkSettings.checkSearch)
         .putBoolean("discovery", checkSettings.checkDiscovery)
         .putBoolean("info", checkSettings.checkInfo)
@@ -678,6 +704,8 @@ public class MainActivity extends AppCompatActivity {
     cbKindFile.setChecked(checkSettings.checkFile);
     cbCategory.setEnabled(cbInfo.isChecked());
     cbContent.setEnabled(cbInfo.isChecked() && cbCategory.isChecked());
+    MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
+    if (cbQuickMode != null) cbQuickMode.setChecked(checkSettings.quickMode);
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) etOkStatus.setText(checkSettings.okStatusRanges);
   }
@@ -705,6 +733,8 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.checkVideo = ((MaterialCheckBox) v.findViewById(R.id.cbKindVideo)).isChecked();
     checkSettings.checkAudio = ((MaterialCheckBox) v.findViewById(R.id.cbKindAudio)).isChecked();
     checkSettings.checkFile = ((MaterialCheckBox) v.findViewById(R.id.cbKindFile)).isChecked();
+    MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
+    if (cbQuickMode != null) checkSettings.quickMode = cbQuickMode.isChecked();
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) {
       checkSettings.okStatusRanges = etOkStatus.getText() == null ? "" : etOkStatus.getText().toString().trim();
@@ -842,6 +872,8 @@ public class MainActivity extends AppCompatActivity {
     if (btnCheckDetail != null) {
       btnCheckDetail.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
     }
+    // 搜索框：有校验结果时显示
+    if (tilCheckSearch != null) tilCheckSearch.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
     // 分类导出与合并同域：有校验结果时显示
     boolean hasCheck = !checkResults.isEmpty();
     if (btnExportOk != null) { /* 显隐由 renderCheckStats 的判断控制，由 exportByCategory 方法检查具体数量 */ }
@@ -850,6 +882,7 @@ public class MainActivity extends AppCompatActivity {
     if (rowCat != null) rowCat.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
     // 合并同域按钮
     if (btnMergeDomain != null) btnMergeDomain.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
+    if (btnExportCsv != null) btnExportCsv.setVisibility(hasCheck ? View.VISIBLE : View.GONE);
     renderKindExportSwitches();
   }
 
@@ -876,12 +909,36 @@ public class MainActivity extends AppCompatActivity {
     if (value != null) value.setTextColor(ContextCompat.getColor(this, colorRes));
   }
 
+  /** 返回当前显示的校验结果（搜索过滤后的或全部）。 */
+  private List<CheckSourceResult> getCheckResultsForDisplay() {
+    return filteredCheckResults != null ? filteredCheckResults : checkResults;
+  }
+
+  /** 搜索关键词过滤校验结果。 */
+  private void applyCheckSearch(String keyword) {
+    if (keyword.isEmpty()) {
+      filteredCheckResults = null;
+    } else {
+      filteredCheckResults = new ArrayList<>();
+      String kw = keyword.toLowerCase(Locale.CHINA);
+      for (CheckSourceResult r : checkResults) {
+        String name = r.source.getName();
+        String url = r.source.getUrl();
+        if ((name != null && name.toLowerCase(Locale.CHINA).contains(kw))
+            || (url != null && url.toLowerCase(Locale.CHINA).contains(kw))) {
+          filteredCheckResults.add(r);
+        }
+      }
+    }
+  }
+
   /** 校验明细入口：先选状态筛选，再按耗时降序查看。 */
   private void showCheckDetail() {
-    if (checkResults.isEmpty()) { toast("暂无校验结果"); return; }
+    List<CheckSourceResult> list = getCheckResultsForDisplay();
+    if (list.isEmpty()) { toast("暂无校验结果"); return; }
     String[] filters = {"全部", "成功", "失败", "超时"};
     new MaterialAlertDialogBuilder(this)
-        .setTitle("校验明细（共 " + checkResults.size() + " 条）")
+        .setTitle("校验明细（共 " + list.size() + " 条）")
         .setSingleChoiceItems(filters, 0, (d, which) -> {
           showCheckDetailList(which);
           d.dismiss();
@@ -892,7 +949,7 @@ public class MainActivity extends AppCompatActivity {
 
   private void showCheckDetailList(int filter) {
     List<CheckSourceResult> list = new ArrayList<>();
-    for (CheckSourceResult r : checkResults) {
+    for (CheckSourceResult r : getCheckResultsForDisplay()) {
       if (r.status == CheckSourceResult.Status.SKIPPED) continue;
       if (filter == 1 && r.status != CheckSourceResult.Status.SUCCESS) continue;
       if (filter == 2 && r.status != CheckSourceResult.Status.FAILED) continue;
@@ -1148,13 +1205,29 @@ public class MainActivity extends AppCompatActivity {
           if (readers.isEmpty()) throw new ActivityNotFoundException("未找到支持 legado:// 导入的阅读 App");
           // 多阅读分支支持
           if (readers.size() > 1) {
-            String[] names = new String[readers.size()];
+            // 每次导入都弹选择框，显示名称+包名+图标方便区分
+            final String[] displayNames = new String[readers.size()];
+            final android.graphics.drawable.Drawable[] iconDrawables = new android.graphics.drawable.Drawable[readers.size()];
             for (int i = 0; i < readers.size(); i++) {
-              names[i] = readers.get(i).loadLabel(getPackageManager()).toString();
+              android.content.pm.ResolveInfo ri = readers.get(i);
+              displayNames[i] = ri.loadLabel(getPackageManager()).toString() + "\n    " + ri.activityInfo.packageName;
+              iconDrawables[i] = ri.loadIcon(getPackageManager());
             }
+            // 自定义列表适配器显示图标
+            android.widget.ListAdapter adapter = new android.widget.ArrayAdapter<String>(this, android.R.layout.simple_list_item_1, displayNames) {
+              @Override
+              public android.view.View getView(int pos, android.view.View v, android.view.ViewGroup p) {
+                android.view.View row = super.getView(pos, v, p);
+                android.widget.TextView tv = (android.widget.TextView) row;
+                tv.setCompoundDrawablesRelativeWithIntrinsicBounds(iconDrawables[pos], null, null, null);
+                tv.setCompoundDrawablePadding(dp(12));
+                tv.setPadding(dp(4), dp(6), dp(4), dp(6));
+                return row;
+              }
+            };
             new MaterialAlertDialogBuilder(this)
                 .setTitle("选择阅读分支")
-                .setItems(names, (d, w) -> {
+                .setAdapter(adapter, (d, w) -> {
                   android.content.pm.ResolveInfo ri = readers.get(w);
                   Intent specific = new Intent(Intent.ACTION_VIEW, deepLink);
                   specific.setPackage(ri.activityInfo.packageName);
@@ -1422,6 +1495,10 @@ public class MainActivity extends AppCompatActivity {
             + "GitHub：https://github.com/MIXUULS/yuedu-source-dedupe\n\n"
             + "本机构建版（debug 签名）。")
         .setPositiveButton("确定", null)
+        .setNeutralButton("重置阅读分支", (d, w) -> {
+          appPrefs().edit().remove("readerBranch").apply();
+          toast("已重置阅读分支选择，下次导入时将重新选择");
+        })
         .show();
   }
 
@@ -1430,7 +1507,7 @@ public class MainActivity extends AppCompatActivity {
     List<SourceRecord> list = new ArrayList<>();
     for (SourceRecord s : exportRecords()) {
       CheckSourceResult matched = null;
-      for (CheckSourceResult r : checkResults) {
+      for (CheckSourceResult r : getCheckResultsForDisplay()) {
         if (r.source.getUrl() != null && r.source.getUrl().equals(s.getUrl())) { matched = r; break; }
       }
       if (matched == null) continue;
@@ -1454,13 +1531,46 @@ public class MainActivity extends AppCompatActivity {
     }, "export-cat").start();
   }
 
+  /** 导出校验结果为 CSV 文件（可在电脑上打开筛选排序）。 */
+  private void exportCsv() {
+    List<CheckSourceResult> list = getCheckResultsForDisplay();
+    if (list.isEmpty()) { toast("没有可导出的数据"); return; }
+    list.sort((a, b) -> Long.compare(b.respondTimeMs, a.respondTimeMs));
+    StringBuilder sb = new StringBuilder();
+    sb.append("名称,网址,结果,说明,耗时(ms),类型\n");
+    for (CheckSourceResult r : list) {
+      String name = r.source.getName();
+      String url = r.source.getUrl();
+      String status = r.status == CheckSourceResult.Status.SUCCESS ? "可用" : (r.status == CheckSourceResult.Status.TIMEOUT ? "超时" : "失败");
+      String msg = r.message == null ? "" : r.message;
+      String kind = r.kind.label;
+      sb.append(csvEscape(name)).append(',');
+      sb.append(csvEscape(url)).append(',');
+      sb.append(status).append(',');
+      sb.append(csvEscape(msg)).append(',');
+      sb.append(r.respondTimeMs).append(',');
+      sb.append(kind).append('\n');
+    }
+    pendingSave = sb.toString();
+    String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
+    csvDoc.launch("校验结果_" + list.size() + "_" + d + ".csv");
+  }
+  private static String csvEscape(String s) {
+    if (s == null) return "";
+    if (s.contains(",") || s.contains("\"") || s.contains("\n")) {
+      return "\"" + s.replace("\"", "\"\"") + "\"";
+    }
+    return s;
+  }
+
   /** 展示同域合并校验结果（A1搜索失败+A2发现失败→合并后搜索+发现都成功）。 */
   private void showMergeDomain() {
-    if (checkResults.isEmpty()) { toast("暂无校验结果"); return; }
-    Map<String, CheckSourceEngine.MergeResult> merged = CheckSourceEngine.mergeByDomain(checkResults);
-    LinearLayout list = new LinearLayout(this);
-    list.setOrientation(LinearLayout.VERTICAL);
-    list.setPadding(dp(20), dp(8), dp(20), dp(8));
+    List<CheckSourceResult> list = getCheckResultsForDisplay();
+    if (list.isEmpty()) { toast("暂无校验结果"); return; }
+    Map<String, CheckSourceEngine.MergeResult> merged = CheckSourceEngine.mergeByDomain(list);
+    LinearLayout ll = new LinearLayout(this);
+    ll.setOrientation(LinearLayout.VERTICAL);
+    ll.setPadding(dp(20), dp(8), dp(20), dp(8));
     int shown = 0;
     for (CheckSourceEngine.MergeResult m : merged.values()) {
       if (shown >= 30) break;
@@ -1471,10 +1581,10 @@ public class MainActivity extends AppCompatActivity {
       tv.setTextColor(ContextCompat.getColor(this, R.color.md_theme_on_surface));
       tv.setText(m.domain + "（" + m.sources.size() + " 个源）\n    合并后通过步骤：" + steps);
       tv.setPadding(0, dp(6), 0, dp(6));
-      list.addView(tv);
+      ll.addView(tv);
     }
     ScrollView sv = new ScrollView(this);
-    sv.addView(list);
+    sv.addView(ll);
     int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
     sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
     new MaterialAlertDialogBuilder(this)
