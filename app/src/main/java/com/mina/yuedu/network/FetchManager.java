@@ -138,12 +138,31 @@ public final class FetchManager {
     }
   }
   private String fetch(String url) throws Exception {
+    Exception last = null;
+    for (int attempt = 1; attempt <= FetchPolicy.MAX_ATTEMPTS; attempt++) {
+      if (state != null && state.isCancelled()) {
+        throw last != null ? last : new IOException("cancelled");
+      }
+      try {
+        return doFetchWithFallback(url);
+      } catch (Exception e) {
+        last = e;
+        if (!FetchPolicy.isRetryable(e)) throw e;
+        if (attempt >= FetchPolicy.MAX_ATTEMPTS) throw e;
+        Thread.sleep(FetchPolicy.backoffMs(attempt));
+      }
+    }
+    throw last != null ? last : new IOException("fetch failed");
+  }
+
+  private String doFetchWithFallback(String url) throws Exception {
     Exception directErr = null;
     try {
       return doFetch(url, Proxy.NO_PROXY);
     } catch (Exception e) {
       directErr = e;
       if (state != null && state.isCancelled()) throw e;
+      if (!FetchPolicy.isRetryable(e)) throw e;
     }
     // 依次尝试：系统代理（梯子/手动代理）→ 本机回退代理
     Proxy sys = SystemProxy.get();
@@ -202,13 +221,16 @@ public final class FetchManager {
     } finally { active.remove(c); c.disconnect(); }
   }
   private HttpURLConnection open(String url, Proxy proxy) throws Exception {
-    HttpURLConnection c=(HttpURLConnection) new URL(url).openConnection(proxy);
-    c.setConnectTimeout(15000);
-    c.setReadTimeout(90000);
+    HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection(proxy);
+    c.setConnectTimeout(FetchPolicy.CONNECT_TIMEOUT_MS);
+    c.setReadTimeout(FetchPolicy.READ_TIMEOUT_MS);
     c.setInstanceFollowRedirects(true);
-    c.setRequestProperty("User-Agent", "YueduSourceDedupe/3.0");
+    c.setRequestProperty("User-Agent", FetchPolicy.USER_AGENT);
     c.setRequestProperty("Accept", "application/json,text/plain,*/*");
-    // 不主动声明 gzip：对齐 2.3.10，避免 Android 透明解压与二次 GZIP 冲突
+    c.setRequestProperty("Accept-Encoding", "gzip");
+    c.setRequestProperty("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8");
+    String origin = FetchPolicy.origin(url);
+    if (origin != null) c.setRequestProperty("Referer", origin);
     return c;
   }
   private static String extractDomain(String url) {
