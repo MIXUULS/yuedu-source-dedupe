@@ -62,7 +62,7 @@ public class MainActivity extends AppCompatActivity {
   private TextView tvExportPreview;
   private final Map<SourceKind, KindRow> kindRows = new EnumMap<>(SourceKind.class);
   private LinearProgressIndicator progressBar;
-  private MaterialSwitch switchCleanNames, switchOnlyUsable;
+  private MaterialSwitch switchCleanNames, switchOnlyUsable, switchCleanLogin;
   private MaterialButtonToggleGroup modeGroup;
   private Slider sliderConcurrency;
   private MaterialButton btnParse, btnStop, btnCheck, btnImport, btnSave;
@@ -77,7 +77,7 @@ public class MainActivity extends AppCompatActivity {
   private List<CheckSourceResult> checkResults = new ArrayList<>();
   private FetchManager fetchManager;
   private CheckSourceEngine checkEngine;
-  private boolean cleanNames, partial, discard, onlyUsable;
+  private boolean cleanNames, partial, discard, onlyUsable, cleanLogin = true;
   private boolean fetchRunning, checkRunning, checkCancelRequested;
   private volatile boolean destroyed;
   private int recomputeGen;
@@ -310,6 +310,8 @@ public class MainActivity extends AppCompatActivity {
     });
     sliderConcurrency.addOnChangeListener((s, value, fromUser) -> concurrency = Math.round(value));
     switchCleanNames.setOnCheckedChangeListener((b, on) -> { cleanNames = on; savePrefs(); if (result != null) recompute(partial); });
+    switchCleanLogin = root.findViewById(R.id.switchCleanLogin);
+    switchCleanLogin.setOnCheckedChangeListener((b, on) -> { cleanLogin = on; savePrefs(); if (result != null) recompute(partial); });
     switchOnlyUsable.setOnCheckedChangeListener((b, on) -> { onlyUsable = on; savePrefs(); refreshExportPreview(); });
     btnParse.setOnClickListener(v -> startParse());
     btnStop.setOnClickListener(v -> stopCurrentTask());
@@ -468,17 +470,30 @@ public class MainActivity extends AppCompatActivity {
     checkCancelRequested = false;
     updateBackgroundTask("");
     List<SourceRecord> copy; synchronized (buckets) { copy = buckets.all(); }
+    // 清理需要登录的源
+    final List<SourceRecord> filteredCopy;
+    if (cleanLogin) {
+      List<SourceRecord> filtered = new ArrayList<>();
+      for (SourceRecord s : copy) {
+        Map<String, Object> raw = s.getRaw();
+        if (raw.containsKey("loginUrl") || raw.containsKey("loginCheckUrl")) continue;
+        filtered.add(s);
+      }
+      filteredCopy = filtered;
+    } else {
+      filteredCopy = copy;
+    }
     final DedupeMode m = mode;
     final boolean clean = cleanNames;
     final boolean partialFlag = isPartial;
     // 去重计算移入后台线程：万级书源在主线程做 URL 规范化+分组+排序会 ANR/闪退
     new Thread(() -> {
-      final DedupeResult base = DedupeEngine.run(copy, m, clean);
+      final DedupeResult base = DedupeEngine.run(filteredCopy, m, clean);
       runOnUiThread(() -> {
         if (destroyed || gen != recomputeGen) return; // Activity 已销毁，或已有更新的计算结果
         List<InvalidSource> all = new ArrayList<>(base.getInvalid());
         synchronized (extraInvalid) { all.addAll(extraInvalid); }
-        result = new DedupeResult(copy.size(), base.getRetained(), base.getDuplicateGroups(), all);
+        result = new DedupeResult(filteredCopy.size(), base.getRetained(), base.getDuplicateGroups(), all);
         partial = partialFlag;
         setTaskRunning(false);
         cardRunning.setVisibility(View.GONE);
@@ -621,6 +636,7 @@ public class MainActivity extends AppCompatActivity {
     if (modeGroup != null) modeGroup.check(checkId);
     if (switchCleanNames != null) switchCleanNames.setChecked(p.getBoolean("clean", false));
     if (switchOnlyUsable != null) switchOnlyUsable.setChecked(p.getBoolean("onlyUsable", false));
+    if (switchCleanLogin != null) switchCleanLogin.setChecked(p.getBoolean("cleanLogin", true));
     if (sliderConcurrency != null) {
       sliderConcurrency.setValue(Math.max(1f, Math.min(5f, (float) p.getInt("concurrency", 4))));
     }
@@ -634,6 +650,7 @@ public class MainActivity extends AppCompatActivity {
         .putString("mode", mode.name())
         .putBoolean("clean", cleanNames)
         .putBoolean("onlyUsable", onlyUsable)
+        .putBoolean("cleanLogin", cleanLogin)
         .putInt("concurrency", concurrency)
         .apply();
   }
