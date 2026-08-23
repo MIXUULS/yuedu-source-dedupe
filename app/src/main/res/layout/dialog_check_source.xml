@@ -115,6 +115,13 @@
             android:layout_marginTop="4dp"
             android:text="快速模式（只跑搜索+详情，跳过发现/目录/正文）" />
 
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/cbDeleteCaptcha"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="删除弹窗验证码的源" />
+
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/tilCheckKeyword"
             style="@style/Widget.Material3.TextInputLayout.FilledBox"

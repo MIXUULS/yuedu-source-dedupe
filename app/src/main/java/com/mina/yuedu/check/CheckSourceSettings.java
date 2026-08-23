@@ -24,6 +24,8 @@ public final class CheckSourceSettings {
   public String okStatusRanges = DEFAULT_OK_STATUS;
   /** 快速模式：只跑搜索+详情两步，跳过发现/目录/正文。 */
   public boolean quickMode = false;
+  /** 删除弹窗验证码的源（默认开）。 */
+  public boolean deleteCaptcha = true;
 
   public void resetToDefaults() {
     timeoutSeconds = DEFAULT_TIMEOUT;

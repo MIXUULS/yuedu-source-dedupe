@@ -709,6 +709,7 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.keyword = p.getString("keyword", CheckSourceSettings.DEFAULT_KEYWORD);
     checkSettings.okStatusRanges = p.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS);
     checkSettings.quickMode = p.getBoolean("quickMode", false);
+    checkSettings.deleteCaptcha = p.getBoolean("deleteCaptcha", true);
     checkSettings.checkSearch = p.getBoolean("search", true);
     checkSettings.checkDiscovery = p.getBoolean("discovery", true);
     checkSettings.checkInfo = p.getBoolean("info", true);
@@ -730,6 +731,7 @@ public class MainActivity extends AppCompatActivity {
         .putString("keyword", checkSettings.keyword)
         .putString("okStatus", checkSettings.okStatusRanges)
         .putBoolean("quickMode", checkSettings.quickMode)
+        .putBoolean("deleteCaptcha", checkSettings.deleteCaptcha)
         .putBoolean("search", checkSettings.checkSearch)
         .putBoolean("discovery", checkSettings.checkDiscovery)
         .putBoolean("info", checkSettings.checkInfo)
@@ -782,6 +784,8 @@ public class MainActivity extends AppCompatActivity {
     cbContent.setEnabled(cbInfo.isChecked() && cbCategory.isChecked());
     MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
     if (cbQuickMode != null) cbQuickMode.setChecked(checkSettings.quickMode);
+    MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
+    if (cbDeleteCaptcha != null) cbDeleteCaptcha.setChecked(checkSettings.deleteCaptcha);
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) etOkStatus.setText(checkSettings.okStatusRanges);
   }
@@ -811,6 +815,8 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.checkFile = ((MaterialCheckBox) v.findViewById(R.id.cbKindFile)).isChecked();
     MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
     if (cbQuickMode != null) checkSettings.quickMode = cbQuickMode.isChecked();
+    MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
+    if (cbDeleteCaptcha != null) checkSettings.deleteCaptcha = cbDeleteCaptcha.isChecked();
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) {
       checkSettings.okStatusRanges = etOkStatus.getText() == null ? "" : etOkStatus.getText().toString().trim();
@@ -868,17 +874,30 @@ public class MainActivity extends AppCompatActivity {
     checkRunning = true;
     checkCancelRequested = false;
     checkResults.clear();
+    // 删除弹窗验证码的源
+    final java.util.List<SourceRecord> finalTargets;
+    if (settings.deleteCaptcha) {
+      java.util.List<SourceRecord> filtered = new java.util.ArrayList<>();
+      for (SourceRecord s : targets) {
+        java.util.Map<String, Object> raw = s.getRaw();
+        if (raw.containsKey("captchaUrl") || raw.containsKey("verifyCode") || raw.containsKey("authUrl")) continue;
+        filtered.add(s);
+      }
+      finalTargets = filtered;
+    } else {
+      finalTargets = targets;
+    }
     cardRunning.setVisibility(View.VISIBLE);
     setTaskRunning(true);
     btnStop.setText("停止校验");
     btnStop.setEnabled(true);
-    updateBackgroundTask("后台校验 0 / " + targets.size());
-    tvProgress.setText("正在校验书源 0 / " + targets.size());
+    updateBackgroundTask("后台校验 0 / " + finalTargets.size());
+    tvProgress.setText("正在校验书源 0 / " + finalTargets.size());
     tvStatus.setText("超时 " + settings.timeoutSeconds + "s · 并发 " + settings.concurrency
         + " · 关键词 " + settings.keyword);
     progressBar.setProgressCompat(0, false);
     checkEngine = new CheckSourceEngine(settings.concurrency);
-    new Thread(() -> checkEngine.checkAll(targets, settings, new CheckSourceEngine.Listener() {
+    new Thread(() -> checkEngine.checkAll(finalTargets, settings, new CheckSourceEngine.Listener() {
       @Override public void onProgress(int done, int total, String currentName) {
         runOnUiThread(() -> {
           if (destroyed) return;
