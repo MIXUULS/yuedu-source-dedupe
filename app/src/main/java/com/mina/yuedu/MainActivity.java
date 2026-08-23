@@ -915,7 +915,7 @@ public class MainActivity extends AppCompatActivity {
           switchOnlyUsable.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
           renderCheckStats();
           // 记录书源健康数据
-          healthTracker.recordBatch(targets, results);
+          healthTracker.recordBatch(finalTargets, results);
           saveHealthData();
           toast(wasCancelled ? "校验已停止，保留已完成 " + results.size() + " 条" : "校验完成");
         });
@@ -1788,15 +1788,16 @@ public class MainActivity extends AppCompatActivity {
 
   /** 导出评分 ≥ 70 的优质书源。 */
   private void exportQualitySources() {
+    if (result == null) { toast("当前无去重结果，无法导出"); return; }
     List<SourceRecord> records = new ArrayList<>();
+    java.util.Set<String> healthUrls = new java.util.HashSet<>();
     for (SourceHealthTracker.HealthRecord hr : healthTracker.getAll()) {
-      if (hr.score >= 70 && result != null) {
-        for (SourceRecord s : result.getRetained()) {
-          if (hr.url.equals(s.getUrl())) { records.add(s); break; }
-        }
-      }
+      if (hr.score >= 70) healthUrls.add(hr.url);
     }
-    if (records.isEmpty()) { toast("当前结果中无优质书源"); return; }
+    for (SourceRecord s : result.getRetained()) {
+      if (s.getUrl() != null && healthUrls.contains(s.getUrl())) records.add(s);
+    }
+    if (records.isEmpty()) { toast("当前结果中无优质书源（评分≥70）"); return; }
     saveShareFile(records);
   }
 
