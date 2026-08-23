@@ -473,13 +473,7 @@ public class MainActivity extends AppCompatActivity {
     // 清理需要登录的源
     final List<SourceRecord> filteredCopy;
     if (cleanLogin) {
-      List<SourceRecord> filtered = new ArrayList<>();
-      for (SourceRecord s : copy) {
-        Map<String, Object> raw = s.getRaw();
-        if (raw.containsKey("loginUrl") || raw.containsKey("loginCheckUrl")) continue;
-        filtered.add(s);
-      }
-      filteredCopy = filtered;
+      filteredCopy = SourceCleaner.cleanLogin(copy);
     } else {
       filteredCopy = copy;
     }
@@ -877,13 +871,7 @@ public class MainActivity extends AppCompatActivity {
     // 删除弹窗验证码的源
     final java.util.List<SourceRecord> finalTargets;
     if (settings.deleteCaptcha) {
-      java.util.List<SourceRecord> filtered = new java.util.ArrayList<>();
-      for (SourceRecord s : targets) {
-        java.util.Map<String, Object> raw = s.getRaw();
-        if (raw.containsKey("captchaUrl") || raw.containsKey("verifyCode") || raw.containsKey("authUrl")) continue;
-        filtered.add(s);
-      }
-      finalTargets = filtered;
+      finalTargets = SourceCleaner.cleanCaptcha(targets);
     } else {
       finalTargets = targets;
     }
