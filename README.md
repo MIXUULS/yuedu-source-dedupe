@@ -1,12 +1,12 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.4.0-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.5.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
 </p>
 
-<p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 分享 · 导入</p>
+<p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 健康追踪 · 分享 · 导入</p>
 
 > 本仓库为 **社区维护版**，基于 [Mina-kk/yuedu-source-dedupe](https://github.com/Mina-kk/yuedu-source-dedupe) 二次开发。
 > 功能持续增强，感谢原作者 ❤️
@@ -19,12 +19,13 @@
 |---|---|
 | 🔄 **去重** | 标准 / 严格 / 激进三种模式，支持 `#标签` 区分同站不同源，规则可存为预设 |
 | 🔍 **校验** | 搜索 → 发现 → 详情 → 目录 → 正文，失败原因统计，明细筛选排序，历史记录，增量重验失败源 |
-| 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示，工具功能按分组卡片整理 |
-| 🔗 **网络** | 自动直连→代理回退（网络异常 + 内容污染），同域串行下载 |
-| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出、多选批量操作、质量快源排序 |
+| 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示，工具功能收纳于右上角菜单，主界面精简 |
+| 🔗 **网络** | 自动直连→代理回退（网络异常 + 内容污染），同域串行下载，GZIP/重试退避 |
+| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出、多选批量操作 |
 | 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择、变更差异报告 |
 | 💾 **持久化** | 状态记忆、URL 历史、自动恢复上次配置、设置一键备份/还原 |
 | 📤 **分享** | 分享文本 / JSON 文件 / 二维码 / 自用分享链接，从剪贴板导入书源，自动分类标签 |
+| ❤️ **健康追踪** | 书源质量评分（0-100）、历史校验记录、健康看板、质量报告、同域优化建议 |
 
 ## 🚀 快速开始
 
@@ -38,9 +39,22 @@
 
 [📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
-当前版本：**v3.4.0**（versionCode 307）· 正式签名发布版
+当前版本：**v3.5.0**（versionCode 308）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.5.0
+
+- 书源健康追踪系统：每次校验自动记录每个源的历史，质量评分（0-100）
+- 健康看板：按评分降序排列，显示建议保留/观察/删除
+- 健康报告：统计总数/域名分布/建议删除列表，可复制可导出
+- 同域优化建议：按域名分组，建议每个域名保留最快 2 个
+- 智能导出：导出优质源（评分≥70），一键导出健康书源
+- 修复「健康数据记录错源」bug（deleteCaptcha 过滤后用了错误列表）
+- 修复「导出优质源」空指针隐患
+- 合并上游 3.0.5-md3：FetchPolicy/重试退避/GZIP/DNS 不重试/BOM 清理
+- 新增「清理需要登录的源」+「删除弹窗验证码的源」过滤选项
+- UI 整理：分享/导入合并为单按钮，导入/保存并排一行，主界面精简
 
 ### v3.4.0
 
