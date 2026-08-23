@@ -115,6 +115,20 @@
             android:layout_marginTop="4dp"
             android:text="快速模式（只跑搜索+详情，跳过发现/目录/正文）" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:text="过滤"
+            android:textStyle="bold" />
+
+        <com.google.android.material.checkbox.MaterialCheckBox
+            android:id="@+id/cbCleanLogin"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:checked="true"
+            android:text="清理需要登录的源" />
+
         <com.google.android.material.checkbox.MaterialCheckBox
             android:id="@+id/cbDeleteCaptcha"
             android:layout_width="match_parent"

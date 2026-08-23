@@ -62,7 +62,7 @@ public class MainActivity extends AppCompatActivity {
   private TextView tvExportPreview;
   private final Map<SourceKind, KindRow> kindRows = new EnumMap<>(SourceKind.class);
   private LinearProgressIndicator progressBar;
-  private MaterialSwitch switchCleanNames, switchOnlyUsable, switchCleanLogin;
+  private MaterialSwitch switchCleanNames, switchOnlyUsable;
   private MaterialButtonToggleGroup modeGroup;
   private Slider sliderConcurrency;
   private MaterialButton btnParse, btnStop, btnCheck, btnImport, btnSave;
@@ -77,7 +77,7 @@ public class MainActivity extends AppCompatActivity {
   private List<CheckSourceResult> checkResults = new ArrayList<>();
   private FetchManager fetchManager;
   private CheckSourceEngine checkEngine;
-  private boolean cleanNames, partial, discard, onlyUsable, cleanLogin = true;
+  private boolean cleanNames, partial, discard, onlyUsable;
   private boolean fetchRunning, checkRunning, checkCancelRequested;
   private volatile boolean destroyed;
   private int recomputeGen;
@@ -310,8 +310,6 @@ public class MainActivity extends AppCompatActivity {
     });
     sliderConcurrency.addOnChangeListener((s, value, fromUser) -> concurrency = Math.round(value));
     switchCleanNames.setOnCheckedChangeListener((b, on) -> { cleanNames = on; savePrefs(); if (result != null) recompute(partial); });
-    switchCleanLogin = root.findViewById(R.id.switchCleanLogin);
-    switchCleanLogin.setOnCheckedChangeListener((b, on) -> { cleanLogin = on; savePrefs(); if (result != null) recompute(partial); });
     switchOnlyUsable.setOnCheckedChangeListener((b, on) -> { onlyUsable = on; savePrefs(); refreshExportPreview(); });
     btnParse.setOnClickListener(v -> startParse());
     btnStop.setOnClickListener(v -> stopCurrentTask());
@@ -472,7 +470,7 @@ public class MainActivity extends AppCompatActivity {
     List<SourceRecord> copy; synchronized (buckets) { copy = buckets.all(); }
     // 清理需要登录的源
     final List<SourceRecord> filteredCopy;
-    if (cleanLogin) {
+    if (checkSettings.cleanLogin) {
       filteredCopy = SourceCleaner.cleanLogin(copy);
     } else {
       filteredCopy = copy;
@@ -630,7 +628,6 @@ public class MainActivity extends AppCompatActivity {
     if (modeGroup != null) modeGroup.check(checkId);
     if (switchCleanNames != null) switchCleanNames.setChecked(p.getBoolean("clean", false));
     if (switchOnlyUsable != null) switchOnlyUsable.setChecked(p.getBoolean("onlyUsable", false));
-    if (switchCleanLogin != null) switchCleanLogin.setChecked(p.getBoolean("cleanLogin", true));
     if (sliderConcurrency != null) {
       sliderConcurrency.setValue(Math.max(1f, Math.min(5f, (float) p.getInt("concurrency", 4))));
     }
@@ -644,7 +641,6 @@ public class MainActivity extends AppCompatActivity {
         .putString("mode", mode.name())
         .putBoolean("clean", cleanNames)
         .putBoolean("onlyUsable", onlyUsable)
-        .putBoolean("cleanLogin", cleanLogin)
         .putInt("concurrency", concurrency)
         .apply();
   }
@@ -704,6 +700,7 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.okStatusRanges = p.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS);
     checkSettings.quickMode = p.getBoolean("quickMode", false);
     checkSettings.deleteCaptcha = p.getBoolean("deleteCaptcha", true);
+    checkSettings.cleanLogin = p.getBoolean("cleanLogin", true);
     checkSettings.checkSearch = p.getBoolean("search", true);
     checkSettings.checkDiscovery = p.getBoolean("discovery", true);
     checkSettings.checkInfo = p.getBoolean("info", true);
@@ -726,6 +723,7 @@ public class MainActivity extends AppCompatActivity {
         .putString("okStatus", checkSettings.okStatusRanges)
         .putBoolean("quickMode", checkSettings.quickMode)
         .putBoolean("deleteCaptcha", checkSettings.deleteCaptcha)
+        .putBoolean("cleanLogin", checkSettings.cleanLogin)
         .putBoolean("search", checkSettings.checkSearch)
         .putBoolean("discovery", checkSettings.checkDiscovery)
         .putBoolean("info", checkSettings.checkInfo)
@@ -780,6 +778,8 @@ public class MainActivity extends AppCompatActivity {
     if (cbQuickMode != null) cbQuickMode.setChecked(checkSettings.quickMode);
     MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
     if (cbDeleteCaptcha != null) cbDeleteCaptcha.setChecked(checkSettings.deleteCaptcha);
+    MaterialCheckBox cbCleanLogin = v.findViewById(R.id.cbCleanLogin);
+    if (cbCleanLogin != null) cbCleanLogin.setChecked(checkSettings.cleanLogin);
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) etOkStatus.setText(checkSettings.okStatusRanges);
   }
@@ -811,6 +811,8 @@ public class MainActivity extends AppCompatActivity {
     if (cbQuickMode != null) checkSettings.quickMode = cbQuickMode.isChecked();
     MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
     if (cbDeleteCaptcha != null) checkSettings.deleteCaptcha = cbDeleteCaptcha.isChecked();
+    MaterialCheckBox cbCleanLogin = v.findViewById(R.id.cbCleanLogin);
+    if (cbCleanLogin != null) checkSettings.cleanLogin = cbCleanLogin.isChecked();
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) {
       checkSettings.okStatusRanges = etOkStatus.getText() == null ? "" : etOkStatus.getText().toString().trim();

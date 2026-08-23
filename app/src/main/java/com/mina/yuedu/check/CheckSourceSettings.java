@@ -26,6 +26,8 @@ public final class CheckSourceSettings {
   public boolean quickMode = false;
   /** 删除弹窗验证码的源（默认开）。 */
   public boolean deleteCaptcha = true;
+  /** 清理需要登录的源（默认开）。 */
+  public boolean cleanLogin = true;
 
   public void resetToDefaults() {
     timeoutSeconds = DEFAULT_TIMEOUT;
