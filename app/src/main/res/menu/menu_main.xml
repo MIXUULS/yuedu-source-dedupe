@@ -26,6 +26,10 @@
         android:title="变更报告"
         app:showAsAction="never" />
     <item
+        android:id="@+id/action_health"
+        android:title="书源健康"
+        app:showAsAction="never" />
+    <item
         android:id="@+id/action_about"
         android:title="关于"
         app:showAsAction="never" />

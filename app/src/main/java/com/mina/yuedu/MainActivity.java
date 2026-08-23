@@ -84,6 +84,7 @@ public class MainActivity extends AppCompatActivity {
   private volatile int fetchGen;
   private int concurrency = 4, nextOrder, localFileCount, currentTab;
   private final CheckSourceSettings checkSettings = new CheckSourceSettings();
+  private final SourceHealthTracker healthTracker = new SourceHealthTracker();
   private String pendingSave, backgroundTaskText = "";
   /** 校验历史：每次校验完成后记录摘要 + 失败/超时书源 URL（供增量重验）。 */
   private final java.util.List<CheckHistoryEntry> checkHistory = new ArrayList<>();
@@ -120,6 +121,7 @@ public class MainActivity extends AppCompatActivity {
     yckSite = YckSite.fromPreference(getSharedPreferences("yck", MODE_PRIVATE).getString("site", "main"));
     loadCheckSettings();
     loadCheckHistory();
+    loadHealthData();
 
     dedupePage = getLayoutInflater().inflate(R.layout.page_dedupe, pageContainer, false);
     pageContainer.addView(dedupePage);
@@ -204,6 +206,7 @@ public class MainActivity extends AppCompatActivity {
     else if (id == R.id.action_backup) showConfigMenu();
     else if (id == R.id.action_compare) showCompareMenu();
     else if (id == R.id.action_report) showChangeReport();
+    else if (id == R.id.action_health) showHealthDashboard();
     else if (id == R.id.action_about) showAbout();
     else return super.onOptionsItemSelected(item);
     return true;
@@ -318,8 +321,7 @@ public class MainActivity extends AppCompatActivity {
     btnSave.setOnClickListener(v -> saveJson());
 
     root.findViewById(R.id.btnShare).setOnClickListener(v -> showShareMenu());
-    root.findViewById(R.id.btnPasteImport).setOnClickListener(v -> pasteImport());
-    // 其余不常用功能（校验历史/重验失败/去重预设/设置备份/版本对比/变更报告）收纳到右上角「更多」菜单，见 onCreate toolbar.setOnMenuItemClickListener
+    // 剪贴板导入已合并到「分享/导入 ▼」菜单中
   }
 
   private void updateModeDesc() { tvModeDesc.setText(mode.description()); }
@@ -912,6 +914,9 @@ public class MainActivity extends AppCompatActivity {
           cardRunning.setVisibility(View.GONE);
           switchOnlyUsable.setVisibility(checkResults.isEmpty() ? View.GONE : View.VISIBLE);
           renderCheckStats();
+          // 记录书源健康数据
+          healthTracker.recordBatch(targets, results);
+          saveHealthData();
           toast(wasCancelled ? "校验已停止，保留已完成 " + results.size() + " 条" : "校验完成");
         });
       }
@@ -1714,6 +1719,8 @@ public class MainActivity extends AppCompatActivity {
     pm.getMenu().add(0, 3, 2, "导出非HTTP书源");
     pm.getMenu().add(0, 4, 3, "导出 CSV（可在电脑打开）");
     pm.getMenu().add(0, 5, 4, "合并同域校验结果");
+    pm.getMenu().add(0, 6, 5, "导出优质源（评分≥70）");
+    pm.getMenu().add(0, 7, 6, "同域优化建议");
     pm.setOnMenuItemClickListener(item -> {
       int id = item.getItemId();
       if (id == 1) exportByCategory("可用");
@@ -1721,9 +1728,190 @@ public class MainActivity extends AppCompatActivity {
       else if (id == 3) exportByCategory("非HTTP");
       else if (id == 4) exportCsv();
       else if (id == 5) showMergeDomain();
+      else if (id == 6) exportQualitySources();
+      else if (id == 7) showDomainOptimization();
       return true;
     });
     pm.show();
+  }
+
+  /** 书源健康看板：按评分排序，显示建议/统计/可导出优质源。 */
+  private void showHealthDashboard() {
+    java.util.List<SourceHealthTracker.HealthRecord> all = healthTracker.getAll();
+    if (all.isEmpty()) { toast("暂无书源健康数据，请先运行校验"); return; }
+    int total = all.size();
+    int retain = 0, watch = 0, remove = 0;
+    long sumMs = 0;
+    for (SourceHealthTracker.HealthRecord r : all) {
+      String sug = r.suggestion();
+      if ("建议保留".equals(sug)) retain++;
+      else if ("建议删除".equals(sug)) remove++;
+      else watch++;
+      sumMs += r.avgResponseMs();
+    }
+    StringBuilder sb = new StringBuilder();
+    sb.append("书源总数：").append(total).append("\n");
+    sb.append("✅ 建议保留：").append(retain).append("\n");
+    sb.append("👀 建议观察：").append(watch).append("\n");
+    sb.append("❌ 建议删除：").append(remove).append("\n");
+    sb.append("平均响应：").append(total > 0 ? sumMs / total : 0).append("ms\n");
+    sb.append("\n按评分降序（前 30 条）：\n");
+    int shown = Math.min(30, all.size());
+    for (int i = 0; i < shown; i++) {
+      SourceHealthTracker.HealthRecord r = all.get(i);
+      sb.append(String.format(Locale.CHINA, "%.0f分 ", r.score))
+          .append(r.name.isEmpty() ? r.url : r.name).append(" ")
+          .append(r.passRate() > 0 ? String.format(Locale.CHINA, "%.0f%% ", r.passRate() * 100) : "")
+          .append(r.avgResponseMs() + "ms ")
+          .append(r.suggestion()).append("\n");
+    }
+    if (all.size() > shown) sb.append("… 其余 ").append(all.size() - shown).append(" 条略\n");
+
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString());
+    tv.setTextSize(13);
+    tv.setTextIsSelectable(true);
+    int p = dp(16);
+    tv.setPadding(p, p, p, p);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("书源健康看板")
+        .setView(sv)
+        .setNegativeButton("导出优质源", (d, w) -> exportQualitySources())
+        .setNeutralButton("健康报告", (d, w) -> showHealthReport())
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  /** 导出评分 ≥ 70 的优质书源。 */
+  private void exportQualitySources() {
+    List<SourceRecord> records = new ArrayList<>();
+    for (SourceHealthTracker.HealthRecord hr : healthTracker.getAll()) {
+      if (hr.score >= 70 && result != null) {
+        for (SourceRecord s : result.getRetained()) {
+          if (hr.url.equals(s.getUrl())) { records.add(s); break; }
+        }
+      }
+    }
+    if (records.isEmpty()) { toast("当前结果中无优质书源"); return; }
+    saveShareFile(records);
+  }
+
+  /** 生成书源健康报告。 */
+  private void showHealthReport() {
+    java.util.List<SourceHealthTracker.HealthRecord> all = healthTracker.getAll();
+    if (all.isEmpty()) { toast("暂无健康数据"); return; }
+    int total = all.size();
+    int retain = 0, watch = 0, remove = 0;
+    for (SourceHealthTracker.HealthRecord r : all) {
+      String sug = r.suggestion();
+      if ("建议保留".equals(sug)) retain++;
+      else if ("建议删除".equals(sug)) remove++;
+      else watch++;
+    }
+    // 按类型统计
+    Map<String, Integer> domainCount = new LinkedHashMap<>();
+    for (SourceHealthTracker.HealthRecord r : all) {
+      String domain;
+      try { domain = new java.net.URL(r.url).getHost(); } catch (Exception e) { domain = r.url; }
+      domainCount.put(domain, domainCount.getOrDefault(domain, 0) + 1);
+    }
+    StringBuilder sb = new StringBuilder();
+    sb.append("=== 书源健康报告 ===\n");
+    sb.append("生成时间：").append(new SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.CHINA).format(new Date())).append("\n\n");
+    sb.append("📊 总体统计\n");
+    sb.append("书源总数：").append(total).append("\n");
+    sb.append("✅ 建议保留：").append(retain).append("（").append(String.format(Locale.CHINA, "%.1f%%", retain * 100.0 / total)).append("）\n");
+    sb.append("👀 建议观察：").append(watch).append("（").append(String.format(Locale.CHINA, "%.1f%%", watch * 100.0 / total)).append("）\n");
+    sb.append("❌ 建议删除：").append(remove).append("（").append(String.format(Locale.CHINA, "%.1f%%", remove * 100.0 / total)).append("）\n\n");
+    sb.append("🏢 域名分布（Top 10）\n");
+    List<Map.Entry<String, Integer>> sorted = new ArrayList<>(domainCount.entrySet());
+    sorted.sort((a, b) -> Integer.compare(b.getValue(), a.getValue()));
+    for (int i = 0; i < Math.min(10, sorted.size()); i++) {
+      sb.append("  ").append(sorted.get(i).getKey()).append(": ").append(sorted.get(i).getValue()).append(" 个\n");
+    }
+    if (sorted.size() > 10) sb.append("  … 其余 ").append(sorted.size() - 10).append(" 个域名\n");
+    sb.append("\n❌ 建议删除的源\n");
+    int removed = 0;
+    for (SourceHealthTracker.HealthRecord r : healthTracker.getSuggestedRemovals()) {
+      if (removed >= 20) { sb.append("  … 其余 ").append(healthTracker.getSuggestedRemovals().size() - 20).append(" 条\n"); break; }
+      removed++;
+      sb.append("  ").append(r.name.isEmpty() ? r.url : r.name).append(" ").append(String.format(Locale.CHINA, "%.0f分", r.score)).append("\n");
+    }
+    if (removed == 0) sb.append("  （无）\n");
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString());
+    tv.setTextSize(13);
+    tv.setTextIsSelectable(true);
+    int p = dp(16);
+    tv.setPadding(p, p, p, p);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("书源健康报告")
+        .setView(sv)
+        .setNegativeButton("复制报告", (d, w) -> {
+          ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+          cm.setPrimaryClip(ClipData.newPlainText("书源健康报告", sb.toString()));
+          toast("报告已复制");
+        })
+        .setPositiveButton("关闭", null)
+        .show();
+  }
+
+  /** 同域优化建议：按域名分组，同域内按评分排序，建议保留最快 2 个。 */
+  private void showDomainOptimization() {
+    java.util.List<SourceHealthTracker.HealthRecord> all = healthTracker.getAll();
+    if (all.isEmpty()) { toast("暂无健康数据，请先运行校验"); return; }
+    Map<String, java.util.List<SourceHealthTracker.HealthRecord>> byDomain = new LinkedHashMap<>();
+    for (SourceHealthTracker.HealthRecord r : all) {
+      String domain;
+      try { domain = new java.net.URL(r.url).getHost(); } catch (Exception e) { domain = r.url; }
+      if (domain.startsWith("www.")) domain = domain.substring(4);
+      byDomain.computeIfAbsent(domain, k -> new ArrayList<>()).add(r);
+    }
+    StringBuilder sb = new StringBuilder();
+    sb.append("同域优化建议（每个域名建议保留最快 2 个）：\n\n");
+    int totalSuggest = 0;
+    for (Map.Entry<String, java.util.List<SourceHealthTracker.HealthRecord>> e : byDomain.entrySet()) {
+      if (e.getValue().size() <= 2) continue;
+      java.util.List<SourceHealthTracker.HealthRecord> sorted = new ArrayList<>(e.getValue());
+      Collections.sort(sorted, (a, b) -> Long.compare(a.avgResponseMs(), b.avgResponseMs()));
+      sb.append("🏢 ").append(e.getKey()).append("（共 ").append(e.getValue().size()).append(" 个）\n");
+      for (int i = 0; i < sorted.size(); i++) {
+        SourceHealthTracker.HealthRecord r = sorted.get(i);
+        sb.append(i < 2 ? "  ✅ " : "  ❌ ");
+        sb.append(r.name.isEmpty() ? r.url : r.name);
+        sb.append(" ").append(String.format(Locale.CHINA, "%.0f分", r.score));
+        sb.append(" ").append(r.avgResponseMs()).append("ms");
+        if (i >= 2) sb.append(" ← 建议精简");
+        sb.append("\n");
+      }
+      totalSuggest += e.getValue().size() - 2;
+      sb.append("\n");
+    }
+    if (totalSuggest == 0) { sb.append("所有域名均不超过 2 个源，无需优化。\n"); }
+    sb.append("共建议精简 ").append(totalSuggest).append(" 个书源。").append("\n");
+    ScrollView sv = new ScrollView(this);
+    TextView tv = new TextView(this);
+    tv.setText(sb.toString());
+    tv.setTextSize(13);
+    tv.setTextIsSelectable(true);
+    int p = dp(16);
+    tv.setPadding(p, p, p, p);
+    sv.addView(tv);
+    int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
+    sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("同域优化建议")
+        .setView(sv)
+        .setPositiveButton("关闭", null)
+        .show();
   }
 
   /** 按分类导出校验结果（可用/不可用/非HTTP）。 */
@@ -2322,6 +2510,19 @@ public class MainActivity extends AppCompatActivity {
       list.add(m);
     }
     checkPrefs().edit().putString("checkHistory", MiniJson.stringify(list)).apply();
+  }
+
+  private void loadHealthData() {
+    String raw = checkPrefs().getString("sourceHealth", "");
+    if (raw == null || raw.isEmpty()) return;
+    try {
+      Object root = MiniJson.parse(raw);
+      if (root instanceof java.util.List) healthTracker.fromJsonList((java.util.List<Object>) root);
+    } catch (Exception ignored) {}
+  }
+
+  private void saveHealthData() {
+    checkPrefs().edit().putString("sourceHealth", MiniJson.stringify(healthTracker.toJsonList())).apply();
   }
 
   /** 展示校验历史：弹窗列出历次记录，可查看详情 / 一键重验该次失败源。 */
