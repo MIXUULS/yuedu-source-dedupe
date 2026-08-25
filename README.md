@@ -1,7 +1,7 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.5.0-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.6.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
 </p>
@@ -39,9 +39,19 @@
 
 [📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
-当前版本：**v3.5.0**（versionCode 308）· 正式签名发布版
+当前版本：**v3.6.0**（versionCode 309）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.6.0
+
+- 新增名称相似度去重（NAME 模式），按 Levenshtein 距离 + 关键词归一化合并同名镜像站
+- 新增全选/反选按钮，校验明细批量操作更便捷
+- 修复 runCheck 缺失 cleanLogin 过滤，校验时同时应用两种过滤
+- 修复校验超时 Slider 最小值 0→1 秒，避免静默回退
+- 优化排版布局：统一文字样式、改善长文本可读性
+- 启用 R8 代码压缩，release APK 从 5MB 降至 2MB
+- 导出分组标签改为按类型分别标记，如 ✔2026-8-23小说（120）
 
 ### v3.5.0
 

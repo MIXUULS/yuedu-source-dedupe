@@ -18,14 +18,20 @@ public final class SourceCleaner {
   public static boolean needsLogin(SourceRecord s) {
     if (s == null) return false;
     Map<String, Object> raw = s.getRaw();
-    return raw.containsKey("loginUrl") || raw.containsKey("loginCheckUrl");
+    return hasValue(raw, "loginUrl") || hasValue(raw, "loginCheckUrl");
   }
 
   /** 检查书源是否「有弹窗验证码」（含 captchaUrl、verifyCode 或 authUrl）。 */
   public static boolean hasCaptcha(SourceRecord s) {
     if (s == null) return false;
     Map<String, Object> raw = s.getRaw();
-    return raw.containsKey("captchaUrl") || raw.containsKey("verifyCode") || raw.containsKey("authUrl");
+    return hasValue(raw, "captchaUrl") || hasValue(raw, "verifyCode") || hasValue(raw, "authUrl");
+  }
+
+  /** 空字段是书源导出时常见的占位值，不能因此过滤掉书源。 */
+  private static boolean hasValue(Map<String, Object> raw, String key) {
+    Object value = raw.get(key);
+    return value != null && !String.valueOf(value).trim().isEmpty();
   }
 
   /** 过滤掉需要登录的源。 */

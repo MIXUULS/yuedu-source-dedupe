@@ -18,8 +18,8 @@ android {
         applicationId = "com.mina.yuedu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 308
-        versionName = "3.5.0"
+        versionCode = 309
+        versionName = "3.6.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {
@@ -48,9 +48,13 @@ android {
         }
         release {
             signingConfig = signingConfigs.getByName("releaseKey")
-            // 开源项目无需混淆/资源收缩：保持可读堆栈便于排查，源码公开也没有加密意义
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // 启用代码压缩（tree shaking）移除未使用的代码和资源，不混淆以保持可读堆栈
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
     buildFeatures {

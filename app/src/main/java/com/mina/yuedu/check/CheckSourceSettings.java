@@ -44,6 +44,9 @@ public final class CheckSourceSettings {
     checkAudio = true;
     checkFile = true;
     okStatusRanges = DEFAULT_OK_STATUS;
+    quickMode = false;
+    deleteCaptcha = true;
+    cleanLogin = true;
   }
 
   public void normalize() {

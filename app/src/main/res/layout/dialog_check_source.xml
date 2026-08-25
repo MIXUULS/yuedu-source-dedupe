@@ -15,6 +15,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:text="@string/check_source_config"
+            android:textColor="@color/md_theme_on_surface"
             android:textSize="20sp"
             android:textStyle="bold" />
 
@@ -36,13 +37,15 @@
                     android:id="@+id/tvTimeoutLabel"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:text="校验超时(秒)：180" />
+                    android:text="校验超时(秒)：180"
+                    android:textColor="@color/md_theme_on_surface"
+                    android:textSize="14sp" />
 
                 <com.google.android.material.slider.Slider
                     android:id="@+id/sliderTimeout"
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:valueFrom="0"
+                    android:valueFrom="1"
                     android:valueTo="300"
                     android:stepSize="1"
                     android:value="180" />
@@ -52,7 +55,9 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="12dp"
-                    android:text="并发校验数量：8" />
+                    android:text="并发校验数量：8"
+                    android:textColor="@color/md_theme_on_surface"
+                    android:textSize="14sp" />
 
                 <com.google.android.material.slider.Slider
                     android:id="@+id/sliderCheckConcurrency"
@@ -67,7 +72,8 @@
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
                     android:text="可按设备和网络在 1–100 间调整；高并发会占用更多网络与内存"
-                    android:textColor="@color/md_theme_outline"
+                    android:textColor="@color/md_theme_on_surface"
+                    android:alpha="0.6"
                     android:textSize="12sp" />
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
@@ -120,6 +126,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:text="过滤"
+            android:textColor="@color/md_theme_on_surface"
+            android:textSize="15sp"
             android:textStyle="bold" />
 
         <com.google.android.material.checkbox.MaterialCheckBox
@@ -161,6 +169,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
             android:hint="可用状态码（如 200-399，支持逗号分隔）"
+            android:textColorHint="@color/md_theme_on_surface"
             app:boxBackgroundMode="filled">
 
             <com.google.android.material.textfield.TextInputEditText
@@ -178,6 +187,8 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="@string/check_source_kinds"
+            android:textColor="@color/md_theme_on_surface"
+            android:textSize="15sp"
             android:textStyle="bold" />
 
         <LinearLayout

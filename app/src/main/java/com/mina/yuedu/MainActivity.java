@@ -88,6 +88,8 @@ public class MainActivity extends AppCompatActivity {
   private String pendingSave, backgroundTaskText = "";
   /** 校验历史：每次校验完成后记录摘要 + 失败/超时书源 URL（供增量重验）。 */
   private final java.util.List<CheckHistoryEntry> checkHistory = new ArrayList<>();
+  /** 被停止的校验尚未处理的 URL，供下次从断点继续。 */
+  private final java.util.List<String> pendingCheckUrls = new ArrayList<>();
   private YckSite yckSite = YckSite.MAIN;
   private YckWebClient yckClient;
   private boolean yckLoaded, yckAutoFellBack;
@@ -115,12 +117,15 @@ public class MainActivity extends AppCompatActivity {
     tabs = findViewById(R.id.tabs);
     pageContainer = findViewById(R.id.pageContainer);
     applySystemBarInsets(findViewById(R.id.rootCoordinator), findViewById(R.id.appBar), pageContainer);
-    tabs.addTab(tabs.newTab().setText(R.string.tab_dedupe));
-    tabs.addTab(tabs.newTab().setText(R.string.tab_yck));
+    if (tabs != null) {
+      tabs.addTab(tabs.newTab().setText(R.string.tab_dedupe));
+      tabs.addTab(tabs.newTab().setText(R.string.tab_yck));
+    }
 
     yckSite = YckSite.fromPreference(getSharedPreferences("yck", MODE_PRIVATE).getString("site", "main"));
     loadCheckSettings();
     loadCheckHistory();
+    loadPendingCheckUrls();
     loadHealthData();
 
     dedupePage = getLayoutInflater().inflate(R.layout.page_dedupe, pageContainer, false);
@@ -305,6 +310,7 @@ public class MainActivity extends AppCompatActivity {
       if (!checked) return;
       if (id == R.id.modeStandard) mode = DedupeMode.STANDARD;
       else if (id == R.id.modeStrict) mode = DedupeMode.STRICT;
+      else if (id == R.id.modeName) mode = DedupeMode.NAME;
       else mode = DedupeMode.AGGRESSIVE;
       operationMode.select(mode);
       updateModeDesc();
@@ -626,6 +632,7 @@ public class MainActivity extends AppCompatActivity {
     String m = p.getString("mode", DedupeMode.STANDARD.name());
     int checkId = R.id.modeStandard;
     if (DedupeMode.STRICT.name().equals(m)) checkId = R.id.modeStrict;
+    else if (DedupeMode.NAME.name().equals(m)) checkId = R.id.modeName;
     else if (DedupeMode.AGGRESSIVE.name().equals(m)) checkId = R.id.modeAggressive;
     if (modeGroup != null) modeGroup.check(checkId);
     if (switchCleanNames != null) switchCleanNames.setChecked(p.getBoolean("clean", false));
@@ -872,13 +879,20 @@ public class MainActivity extends AppCompatActivity {
     checkRunning = true;
     checkCancelRequested = false;
     checkResults.clear();
-    // 删除弹窗验证码的源
+    // 删除弹窗验证码的源 + 清理需要登录的源
     final java.util.List<SourceRecord> finalTargets;
+    List<SourceRecord> afterCaptcha = targets;
     if (settings.deleteCaptcha) {
-      finalTargets = SourceCleaner.cleanCaptcha(targets);
-    } else {
-      finalTargets = targets;
+      afterCaptcha = SourceCleaner.cleanCaptcha(targets);
     }
+    if (settings.cleanLogin) {
+      finalTargets = SourceCleaner.cleanLogin(afterCaptcha);
+    } else {
+      finalTargets = afterCaptcha;
+    }
+    int incompleteRules = 0;
+    for (SourceRecord source : finalTargets) if (!RuleCompleteness.isComplete(source)) incompleteRules++;
+    if (incompleteRules > 0) toast("校验前诊断：" + incompleteRules + " 条书源缺少部分规则，结果会标明失败步骤");
     cardRunning.setVisibility(View.VISIBLE);
     setTaskRunning(true);
     btnStop.setText("停止校验");
@@ -888,8 +902,9 @@ public class MainActivity extends AppCompatActivity {
     tvStatus.setText("超时 " + settings.timeoutSeconds + "s · 并发 " + settings.concurrency
         + " · 关键词 " + settings.keyword);
     progressBar.setProgressCompat(0, false);
-    checkEngine = new CheckSourceEngine(settings.concurrency);
-    new Thread(() -> checkEngine.checkAll(finalTargets, settings, new CheckSourceEngine.Listener() {
+    final CheckSourceEngine engine = new CheckSourceEngine(settings.concurrency);
+    checkEngine = engine;
+    new Thread(() -> engine.checkAll(finalTargets, settings, new CheckSourceEngine.Listener() {
       @Override public void onProgress(int done, int total, String currentName) {
         runOnUiThread(() -> {
           if (destroyed) return;
@@ -903,12 +918,23 @@ public class MainActivity extends AppCompatActivity {
       @Override public void onFinished(List<CheckSourceResult> results) {
         runOnUiThread(() -> {
           if (destroyed) return;
-          boolean wasCancelled = checkCancelRequested || (checkEngine != null && checkEngine.isCancelled());
+          boolean wasCancelled = checkCancelRequested || engine.isCancelled();
           checkResults = results;
+          if (wasCancelled) {
+            Set<String> completed = new HashSet<>();
+            for (CheckSourceResult item : results) if (item.source.getUrl() != null) completed.add(item.source.getUrl());
+            pendingCheckUrls.clear();
+            for (SourceRecord source : finalTargets) {
+              if (source.getUrl() != null && !completed.contains(source.getUrl())) pendingCheckUrls.add(source.getUrl());
+            }
+          } else {
+            pendingCheckUrls.clear();
+          }
+          persistPendingCheckUrls();
           rememberCheckHistory(results);
           checkRunning = false;
           checkCancelRequested = false;
-          checkEngine = null;
+          if (checkEngine == engine) checkEngine = null;
           updateBackgroundTask("");
           setTaskRunning(false);
           cardRunning.setVisibility(View.GONE);
@@ -1073,6 +1099,17 @@ public class MainActivity extends AppCompatActivity {
     actions.addView(btnCopySel);
     actions.addView(btnRemoveSel);
     content.addView(actions);
+    // 全选 / 反选按钮行
+    LinearLayout selectActions = new LinearLayout(this);
+    selectActions.setOrientation(LinearLayout.HORIZONTAL);
+    selectActions.setPadding(dp(4), dp(4), dp(4), dp(8));
+    MaterialButton btnSelectAll = new MaterialButton(this);
+    btnSelectAll.setText("全选");
+    MaterialButton btnInvert = new MaterialButton(this);
+    btnInvert.setText("反选");
+    selectActions.addView(btnSelectAll);
+    selectActions.addView(btnInvert);
+    content.addView(selectActions);
     int shown = 0;
     for (int idx = 0; idx < list.size(); idx++) {
       if (shown >= 200) break;
@@ -1123,6 +1160,20 @@ public class MainActivity extends AppCompatActivity {
       }
       removeSourcesFromResult(removeUrls);
       new MaterialAlertDialogBuilder(this).setTitle("已移除").setMessage("已移除 " + removeUrls.size() + " 条选中书源").setPositiveButton("确定", null).show();
+    });
+    btnSelectAll.setOnClickListener(v -> {
+      selected.clear();
+      for (int i = 0; i < boxes.size(); i++) { boxes.get(i).setChecked(true); selected.add(i); }
+    });
+    btnInvert.setOnClickListener(v -> {
+      java.util.Set<Integer> newSelected = new java.util.TreeSet<>();
+      for (int i = 0; i < boxes.size(); i++) {
+        boolean was = selected.contains(i);
+        boxes.get(i).setChecked(!was);
+        if (!was) newSelected.add(i);
+      }
+      selected.clear();
+      selected.addAll(newSelected);
     });
 
     ScrollView sv = new ScrollView(this);
@@ -1189,6 +1240,14 @@ public class MainActivity extends AppCompatActivity {
       StringBuilder sb = new StringBuilder();
       sb.append(shown).append(". ").append(keptName == null ? "(无名)" : keptName).append("\n");
       sb.append("    保留理由：").append(g.getReason()).append("\n");
+      // NAME 模式下显示归一化名称
+      if (mode == DedupeMode.NAME) {
+        String norm = NameSimilarity.normalize(g.getKept().getName());
+        if (!norm.isEmpty() && !norm.equals(g.getKept().getName())) {
+          sb.append("    归一化名称：").append(norm).append("\n");
+        }
+        sb.append("    说明：名称模式只影响当前结果，切换模式即可恢复全部原始书源。\n");
+      }
       sb.append("    合并 ").append(g.getRemoved().size()).append(" 个：");
       int c = 0;
       for (SourceRecord r : g.getRemoved()) {
@@ -1197,6 +1256,16 @@ public class MainActivity extends AppCompatActivity {
         if (n == null || n.trim().isEmpty()) n = r.getUrl();
         if (c > 0) sb.append("、");
         sb.append(n == null ? "(无名)" : n);
+        // NAME 模式下显示归一化名称
+        if (mode == DedupeMode.NAME && n != null) {
+          String rNorm = NameSimilarity.normalize(n);
+          if (!rNorm.isEmpty() && !rNorm.equals(n)) {
+            sb.append("(").append(rNorm).append(")");
+          }
+          double similarity = NameSimilarity.similarity(NameSimilarity.normalize(g.getKept().getName()), rNorm);
+          sb.append("·相似 ").append(Math.round(similarity * 100)).append("%");
+          sb.append("·").append(domainLabel(r.getUrl()));
+        }
         c++;
       }
       TextView tv = new TextView(this);
@@ -1211,10 +1280,20 @@ public class MainActivity extends AppCompatActivity {
     int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.6f);
     sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
     new MaterialAlertDialogBuilder(this)
-        .setTitle("重复组 " + groups.size() + " 个" + (groups.size() > shown ? "（显示前 " + shown + " 个）" : ""))
+        .setTitle((mode == DedupeMode.NAME ? "名称去重安全预览 · " : "重复组 ") + groups.size() + " 个" + (groups.size() > shown ? "（显示前 " + shown + " 个）" : ""))
         .setView(sv)
         .setPositiveButton("关闭", null)
         .show();
+  }
+
+  private static String domainLabel(String url) {
+    if (url == null || url.trim().isEmpty()) return "无地址";
+    try {
+      String host = new java.net.URL(url).getHost();
+      return host == null || host.isEmpty() ? url : host;
+    } catch (Exception ignored) {
+      return url;
+    }
   }
 
   private void renderKindExportSwitches() {
@@ -1314,14 +1393,26 @@ public class MainActivity extends AppCompatActivity {
     if (list == null || list.isEmpty()) return Collections.emptyList();
     List<Object> payload = new ArrayList<>();
     String stamp = new SimpleDateFormat("yyyy-M-d", Locale.CHINA).format(new Date());
-    String mark = "✔" + stamp + "检验去重（优质" + list.size() + "）";
+    // 按类型统计书源数量，用于生成分类标签
+    Map<SourceKind, Integer> kindCounts = new LinkedHashMap<>();
+    for (SourceRecord s : list) {
+      SourceKind k = SourceKind.of(s);
+      kindCounts.put(k, kindCounts.getOrDefault(k, 0) + 1);
+    }
+    // 生成每种类型的标记字符串，如 "✔2026-8-23小说（120）"
+    Map<SourceKind, String> kindMarks = new LinkedHashMap<>();
+    for (Map.Entry<SourceKind, Integer> e : kindCounts.entrySet()) {
+      kindMarks.put(e.getKey(), "✔" + stamp + e.getKey().label + "（" + e.getValue() + "）");
+    }
     for (SourceRecord s : list) {
       Map<String, Object> m = new LinkedHashMap<>(s.getRaw());
       m.put("bookSourceName", s.getName());
+      SourceKind kind = SourceKind.of(s);
+      String mark = kindMarks.getOrDefault(kind, "✔" + stamp + "书源（" + list.size() + "）");
       Object g = m.get("bookSourceGroup");
       String gs = g == null ? "" : String.valueOf(g);
-      // replace previous inspection marks to avoid stacking
-      gs = gs.replaceAll("(?:,)?✔\\d{4}-\\d{1,2}-\\d{1,2}检验去重（优质\\d+）", "");
+      // 清除旧的标记避免堆叠（兼容新旧格式）
+      gs = gs.replaceAll("(?:,)?✔\\d{4}-\\d{1,2}-\\d{1,2}[^，^,]*（\\d+）", "");
       if (gs.startsWith(",")) gs = gs.substring(1);
       m.put("bookSourceGroup", gs.isEmpty() ? mark : gs + "," + mark);
       // 自动分类标签：按书源类型把分类追加到分组，便于阅读内部分组
@@ -1699,7 +1790,7 @@ public class MainActivity extends AppCompatActivity {
     tv.setPadding(dp(24), dp(12), dp(24), dp(12));
     tv.setText("轻量原生 Android 阅读书源整理工具：合并、去重、校验、导入。\n\n"
         + "GitHub：https://github.com/MIXUULS/yuedu-source-dedupe\n\n"
-        + "本机构建版（debug 签名）。");
+        + (BuildConfig.DEBUG ? "本机构建版（debug 签名）。" : "正式发布版。"));
     tv.setAutoLinkMask(android.text.util.Linkify.WEB_URLS);
     tv.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
     tv.setTextSize(14);
@@ -1721,6 +1812,7 @@ public class MainActivity extends AppCompatActivity {
     pm.getMenu().add(0, 5, 4, "合并同域校验结果");
     pm.getMenu().add(0, 6, 5, "导出优质源（评分≥70）");
     pm.getMenu().add(0, 7, 6, "同域优化建议");
+    pm.getMenu().add(0, 8, 7, "智能优选导出（评分≥70，每域最多2个）");
     pm.setOnMenuItemClickListener(item -> {
       int id = item.getItemId();
       if (id == 1) exportByCategory("可用");
@@ -1730,6 +1822,7 @@ public class MainActivity extends AppCompatActivity {
       else if (id == 5) showMergeDomain();
       else if (id == 6) exportQualitySources();
       else if (id == 7) showDomainOptimization();
+      else if (id == 8) exportSmartQualitySources();
       return true;
     });
     pm.show();
@@ -1798,6 +1891,14 @@ public class MainActivity extends AppCompatActivity {
       if (s.getUrl() != null && healthUrls.contains(s.getUrl())) records.add(s);
     }
     if (records.isEmpty()) { toast("当前结果中无优质书源（评分≥70）"); return; }
+    saveShareFile(records);
+  }
+
+  /** 按评分、速度优先级筛选，并限制每个域名最多保留两个优质源。 */
+  private void exportSmartQualitySources() {
+    List<SourceRecord> records = QualityExportPolicy.select(exportRecords(), healthTracker, 70, 2);
+    if (records.isEmpty()) { toast("暂无评分≥70 的健康书源，请先完成校验"); return; }
+    toast("已智能优选 " + records.size() + " 条书源");
     saveShareFile(records);
   }
 
@@ -2017,7 +2118,7 @@ public class MainActivity extends AppCompatActivity {
 
   @Override public void onBackPressed() {
     if (currentTab == 1 && yck.canGoBack()) yck.goBack();
-    else if (currentTab == 1) { tabs.selectTab(tabs.getTabAt(0)); showDedupe(); }
+    else if (currentTab == 1) { if (tabs != null) tabs.selectTab(tabs.getTabAt(0)); showDedupe(); }
     else new MaterialAlertDialogBuilder(this).setTitle("退出确认").setMessage("确定要退出阅读书源去重吗？")
       .setPositiveButton("退出", (d, w) -> finish()).setNegativeButton("取消", null).show();
   }
@@ -2599,6 +2700,11 @@ public class MainActivity extends AppCompatActivity {
   /** 一键重验上次本次失败/超时源。 */
   private void recheckFailedSources() {
     if (result == null || result.getRetained().isEmpty()) { toast("请先解析书源再进行重验"); return; }
+    if (!pendingCheckUrls.isEmpty()) {
+      toast("从上次中断处继续校验 " + pendingCheckUrls.size() + " 条书源…");
+      recheckUrls(new ArrayList<>(pendingCheckUrls), "上次未完成书源");
+      return;
+    }
     // 用最近一次校验的失败源
     List<String> badUrls = null;
     for (CheckHistoryEntry e : checkHistory) if (!e.badUrls.isEmpty()) { badUrls = e.badUrls; break; }
@@ -2616,6 +2722,26 @@ public class MainActivity extends AppCompatActivity {
     if (targets.isEmpty()) { toast("这些失败源已不在当前结果中，无需重验"); return; }
     toast("开始增量重验 " + targets.size() + " 条失败源…");
     runCheck(checkSettings, targets);
+  }
+
+  @SuppressWarnings("unchecked")
+  private void loadPendingCheckUrls() {
+    pendingCheckUrls.clear();
+    String raw = checkPrefs().getString("pendingCheckUrls", "");
+    if (raw == null || raw.isEmpty()) return;
+    try {
+      Object value = MiniJson.parse(raw);
+      if (!(value instanceof List)) return;
+      for (Object url : (List<Object>) value) {
+        if (url != null && !String.valueOf(url).trim().isEmpty()) pendingCheckUrls.add(String.valueOf(url));
+      }
+    } catch (Exception ignored) {}
+  }
+
+  private void persistPendingCheckUrls() {
+    List<Object> payload = new ArrayList<>();
+    payload.addAll(pendingCheckUrls);
+    checkPrefs().edit().putString("pendingCheckUrls", MiniJson.stringify(payload)).apply();
   }
 
   // ================= ==== 第二批：去重规则预设 ================= ====
@@ -2687,10 +2813,11 @@ public class MainActivity extends AppCompatActivity {
       String modeName = String.valueOf(p.get("mode"));
       DedupeMode m = DedupeMode.STANDARD;
       if (DedupeMode.STRICT.name().equals(modeName)) m = DedupeMode.STRICT;
+      else if (DedupeMode.NAME.name().equals(modeName)) m = DedupeMode.NAME;
       else if (DedupeMode.AGGRESSIVE.name().equals(modeName)) m = DedupeMode.AGGRESSIVE;
       mode = m;
       operationMode.select(m);
-      int checkId = m == DedupeMode.STRICT ? R.id.modeStrict : (m == DedupeMode.AGGRESSIVE ? R.id.modeAggressive : R.id.modeStandard);
+      int checkId = m == DedupeMode.STRICT ? R.id.modeStrict : (m == DedupeMode.NAME ? R.id.modeName : (m == DedupeMode.AGGRESSIVE ? R.id.modeAggressive : R.id.modeStandard));
       if (modeGroup != null) modeGroup.check(checkId);
       boolean clean = p.get("clean") instanceof Boolean ? (Boolean) p.get("clean") : Boolean.parseBoolean(String.valueOf(p.get("clean")));
       cleanNames = clean;

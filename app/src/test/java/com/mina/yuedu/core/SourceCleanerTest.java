@@ -3,7 +3,9 @@ package com.mina.yuedu.core;
 import com.mina.yuedu.model.SourceRecord;
 import org.junit.Test;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.Assert.*;
 
@@ -70,5 +72,19 @@ public class SourceCleanerTest {
 
   @Test public void cleanCaptchaNullHandling() {
     assertTrue(SourceCleaner.cleanCaptcha(null).isEmpty());
+  }
+
+  @Test public void blankLoginAndCaptchaFieldsDoNotCauseFalseFiltering() {
+    Map<String, Object> raw = new LinkedHashMap<>();
+    raw.put("bookSourceName", "正常源");
+    raw.put("bookSourceUrl", "https://example.com");
+    raw.put("loginUrl", " ");
+    raw.put("captchaUrl", "");
+    SourceRecord source = new SourceRecord(0, "正常源", "https://example.com", raw);
+
+    assertFalse(SourceCleaner.needsLogin(source));
+    assertFalse(SourceCleaner.hasCaptcha(source));
+    assertEquals(1, SourceCleaner.cleanLogin(Arrays.asList(source)).size());
+    assertEquals(1, SourceCleaner.cleanCaptcha(Arrays.asList(source)).size());
   }
 }

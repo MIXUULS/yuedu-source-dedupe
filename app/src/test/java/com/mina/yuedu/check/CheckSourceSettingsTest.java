@@ -104,4 +104,17 @@ public class CheckSourceSettingsTest {
     assertTrue(settings.checkVideo);
     assertTrue(settings.checkComic);
   }
+
+  @Test public void resetToDefaultsRestoresQuickAndFilterOptions() {
+    CheckSourceSettings settings = new CheckSourceSettings();
+    settings.quickMode = true;
+    settings.deleteCaptcha = false;
+    settings.cleanLogin = false;
+
+    settings.resetToDefaults();
+
+    assertFalse(settings.quickMode);
+    assertTrue(settings.deleteCaptcha);
+    assertTrue(settings.cleanLogin);
+  }
 }

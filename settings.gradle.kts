@@ -17,5 +17,5 @@ dependencyResolutionManagement {
         maven { url = uri("https://maven.aliyun.com/repository/public") }
     }
 }
-rootProject.name = "legado-dedupe-md3"
+rootProject.name = "yuedu-toolbox"
 include(":app")

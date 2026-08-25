@@ -97,9 +97,9 @@ public final class SourceHealthTracker {
       // 响应速度
       long avg = avgResponseMs();
       if (avg > 0 && avg < 1000) s += 10;
-      else if (avg < 3000) s += 5;
-      else if (avg > 10000) s -= 5;
+      else if (avg >= 1000 && avg < 3000) s += 5;
       else if (avg > 20000) s -= 10;
+      else if (avg > 10000) s -= 5;
       // 通过率
       double pr = passRate();
       if (pr >= 0.8) s += 10;
