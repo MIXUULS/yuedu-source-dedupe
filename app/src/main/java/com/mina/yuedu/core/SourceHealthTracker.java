@@ -99,6 +99,7 @@ public final class SourceHealthTracker {
       if (avg > 0 && avg < 1000) s += 10;
       else if (avg >= 1000 && avg < 3000) s += 5;
       else if (avg > 20000) s -= 10;
+      else if (avg >= 3000 && avg <= 10000) { /* 中等速度，不调整 */ }
       else if (avg > 10000) s -= 5;
       // 通过率
       double pr = passRate();

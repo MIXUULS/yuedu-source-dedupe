@@ -4,6 +4,8 @@
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.6.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
+  <a><img src="https://img.shields.io/badge/Android-7.0%2B-34A853.svg" alt="Android"></a>
+  <a><img src="https://img.shields.io/badge/APK_Release-2MB-orange.svg" alt="APK大小"></a>
 </p>
 
 <p align="center">轻量原生 Android 书源整理工具 · 合并 · 去重 · 校验 · 健康追踪 · 分享 · 导入</p>
@@ -17,12 +19,12 @@
 
 | 类别 | 功能 |
 |---|---|
-| 🔄 **去重** | 标准 / 严格 / 激进三种模式，支持 `#标签` 区分同站不同源，规则可存为预设 |
+| 🔄 **去重** | 标准 / 严格 / 激进 / 名称四种模式，支持 `#标签` 区分同站不同源，规则可存为预设 |
 | 🔍 **校验** | 搜索 → 发现 → 详情 → 目录 → 正文，失败原因统计，明细筛选排序，历史记录，增量重验失败源 |
 | 🌙 **界面** | Material 3、深色模式、下载进度/速度实时显示，工具功能收纳于右上角菜单，主界面精简 |
 | 🔗 **网络** | 自动直连→代理回退（网络异常 + 内容污染），同域串行下载，GZIP/重试退避 |
-| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出、多选批量操作 |
-| 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择、变更差异报告 |
+| 📋 **结果** | 分类导出、重复明细、合并同域校验结果、CSV 导出、多选批量、全选/反选 |
+| 🧠 **智能** | 快速校验模式、自定义可用状态码、多阅读分支选择、变更差异报告、名称相似度去重 |
 | 💾 **持久化** | 状态记忆、URL 历史、自动恢复上次配置、设置一键备份/还原 |
 | 📤 **分享** | 分享文本 / JSON 文件 / 二维码 / 自用分享链接，从剪贴板导入书源，自动分类标签 |
 | ❤️ **健康追踪** | 书源质量评分（0-100）、历史校验记录、健康看板、质量报告、同域优化建议 |
@@ -39,6 +41,11 @@
 
 [📥 前往 Releases 下载 APK](https://github.com/MIXUULS/yuedu-source-dedupe/releases)
 
+| 版本 | APK 大小 | 说明 |
+|------|----------|------|
+| 本社区版 v3.6.0 | **~2 MB** | R8 压缩，正式签名 |
+| 上游 v3.0.5 | ~6.8 MB | 未压缩 |
+
 当前版本：**v3.6.0**（versionCode 309）· 正式签名发布版
 
 ## 📝 更新日志
@@ -48,6 +55,7 @@
 - 新增名称相似度去重（NAME 模式），按 Levenshtein 距离 + 关键词归一化合并同名镜像站
 - 新增全选/反选按钮，校验明细批量操作更便捷
 - 修复 runCheck 缺失 cleanLogin 过滤，校验时同时应用两种过滤
+- 修复 SourceHealthTracker 评分边界漏洞（avg=3000~10000 区间空档）
 - 修复校验超时 Slider 最小值 0→1 秒，避免静默回退
 - 优化排版布局：统一文字样式、改善长文本可读性
 - 启用 R8 代码压缩，release APK 从 5MB 降至 2MB

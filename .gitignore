@@ -36,3 +36,5 @@ Thumbs.db
 # Local tooling
 .worktrees/
 .superpowers/
+.reasonix/
+AGENTS.md
