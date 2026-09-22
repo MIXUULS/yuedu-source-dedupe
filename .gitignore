@@ -27,6 +27,8 @@ keystore/
 *.log
 *.tmp
 *.part
+.gradle-home/
+device-smoke*.png
 
 # Editor / OS
 .vscode/
