@@ -65,7 +65,9 @@ public final class CheckSourceEngine {
     int total = sources.size();
     if (total == 0) {
       listener.onFinished(out);
+      // 两个池都要关闭：只关 pool 的话 doCheckPool 的非守护线程会一直空转泄漏
       pool.shutdownNow();
+      doCheckPool.shutdownNow();
       return;
     }
     CountDownLatch latch = new CountDownLatch(total);

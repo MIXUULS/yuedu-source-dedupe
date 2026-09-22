@@ -96,8 +96,8 @@ public final class NameSimilarity {
 
     // 移除括号及括号内内容（如 "(官方)"、"（备用）"）
     s = s.replaceAll("[（(][^）)]*[）)]", "").trim();
-    // 移除常见分隔符
-    s = s.replaceAll("[_\\-–—・·\\s]+", " ").trim();
+    // 移除常见分隔符（\s 不含全角空格/不间断空格，需显式加入）
+    s = s.replaceAll("[_\\-–—・·\\s\\u3000\\u00A0\\u2007\\u202F]+", " ").trim();
 
     // 从尾部开始，贪婪匹配并移除 IGNORED_MODIFIERS 中的修饰词
     // 先按长度降序排序，优先匹配更长的修饰词
@@ -234,9 +234,9 @@ public final class NameSimilarity {
     Object en = s.getRaw().get("enabled");
     if (!(en instanceof Boolean) || (Boolean) en) n += 5;
     Object t = s.getRaw().get("lastUpdateTime");
-    if (t instanceof Number) n += (int) Math.min(50, ((Number) t).longValue() / 1_000_000_000L);
+    if (t instanceof Number) n += DedupeEngine.recencyBonus(((Number) t).longValue());
     else if (t != null) {
-      try { n += (int) Math.min(50, Long.parseLong(String.valueOf(t)) / 1_000_000_000L); } catch (Exception ignored) {}
+      try { n += DedupeEngine.recencyBonus(Long.parseLong(String.valueOf(t))); } catch (Exception ignored) {}
     }
     for (String rk : new String[]{"ruleSearch", "ruleBookInfo", "ruleToc", "ruleContent", "ruleExplore"}) {
       Object rv = s.getRaw().get(rk);

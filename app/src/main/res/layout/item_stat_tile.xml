@@ -6,7 +6,7 @@
     android:layout_margin="4dp"
     android:layout_weight="1"
     app:cardBackgroundColor="@color/ledger_paper"
-    app:cardCornerRadius="12dp"
+    app:cardCornerRadius="8dp"
     app:cardElevation="0dp"
     app:strokeColor="@color/ledger_rule"
     app:strokeWidth="1dp">

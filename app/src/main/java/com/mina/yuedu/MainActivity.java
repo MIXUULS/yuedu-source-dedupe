@@ -77,7 +77,8 @@ public class MainActivity extends AppCompatActivity {
   private List<CheckSourceResult> checkResults = new ArrayList<>();
   private FetchManager fetchManager;
   private CheckSourceEngine checkEngine;
-  private boolean cleanNames, partial, discard, onlyUsable;
+  private boolean cleanNames, partial, onlyUsable;
+  private volatile boolean discard;
   private boolean fetchRunning, checkRunning, checkCancelRequested;
   private volatile boolean destroyed;
   private int recomputeGen;
@@ -223,6 +224,14 @@ public class MainActivity extends AppCompatActivity {
     // 停止后台任务，避免旋转屏幕/退出后回调操作已销毁的视图（ANR/崩溃/泄漏）
     if (fetchManager != null) fetchManager.cancel(true);
     if (checkEngine != null) checkEngine.cancel();
+    // 释放 WebView：JS 桥与 Client 都持有本 Activity 的引用，不销毁会把整个视图树一起泄漏
+    if (yck != null) {
+      yck.stopLoading();
+      ViewGroup parent = (ViewGroup) yck.getParent();
+      if (parent != null) parent.removeView(yck);
+      yck.setWebViewClient(null);
+      yck.destroy();
+    }
     super.onDestroy();
   }
 
@@ -354,6 +363,7 @@ public class MainActivity extends AppCompatActivity {
     concurrency = Math.round(sliderConcurrency.getValue());
     savePrefs();
     partial = false; discard = false; checkResults.clear();
+    refreshCheckSearchFilter();
     synchronized (buckets) { buckets.replaceNetwork(Collections.emptyList()); }
     synchronized (extraInvalid) { extraInvalid.clear(); }
     synchronized (discovered) { discovered.clear(); }
@@ -397,9 +407,11 @@ public class MainActivity extends AppCompatActivity {
         });
       }
       @Override public void onItem(String url, String body, SourceParser.ParseResult p) {
-        if (gen != fetchGen) return; // 已有新任务，旧任务数据不再提交
         // p 已在 FetchManager 解析完成，无需重复解析
         synchronized (buckets) {
+          // gen 检查必须在锁内：clearAll 会先加锁清空再自增 gen，
+          // 锁外检查过的旧回调可能在清空之后进入，把刚删除的数据"复活"
+          if (gen != fetchGen || discard) return;
           if (!p.getRecords().isEmpty()) {
             buckets.addNetwork(reorder(p.getRecords()));
           } else {
@@ -417,19 +429,25 @@ public class MainActivity extends AppCompatActivity {
         }
       }
       @Override public void onFailure(String u, String m) {
-        if (gen != fetchGen) return;
-        synchronized (extraInvalid) { extraInvalid.add(new InvalidSource(InvalidSource.Kind.NETWORK_FAILURE, u + " · " + m)); }
+        synchronized (extraInvalid) {
+          if (gen != fetchGen || discard) return;
+          extraInvalid.add(new InvalidSource(InvalidSource.Kind.NETWORK_FAILURE, u + " · " + m));
+        }
       }
       @Override public void onFinished(boolean cancelled, boolean keep) {
         runOnUiThread(() -> {
           if (destroyed || gen != fetchGen) return;
           if (discard) {
             discard = false;
+            synchronized (buckets) { buckets.replaceNetwork(Collections.emptyList()); }
+            synchronized (extraInvalid) { extraInvalid.clear(); }
+            synchronized (discovered) { discovered.clear(); }
             fetchRunning = false;
             fetchManager = null;
             updateBackgroundTask("");
             setTaskRunning(false);
             cardRunning.setVisibility(View.GONE);
+            recompute(false);
             return;
           }
           List<String> more;
@@ -552,6 +570,7 @@ public class MainActivity extends AppCompatActivity {
     synchronized (extraInvalid) { extraInvalid.clear(); }
     synchronized (discovered) { discovered.clear(); }
     localFileCount = 0; result = null; checkResults.clear(); partial = false;
+    refreshCheckSearchFilter();
     fetchRunning = false; checkRunning = false; checkCancelRequested = false;
     updateBackgroundTask("");
     etUrls.setText(""); tvLocalStatus.setVisibility(View.GONE); cardResult.setVisibility(View.GONE); cardRunning.setVisibility(View.GONE);
@@ -764,9 +783,11 @@ public class MainActivity extends AppCompatActivity {
     MaterialCheckBox cbKindAudio = v.findViewById(R.id.cbKindAudio);
     MaterialCheckBox cbKindFile = v.findViewById(R.id.cbKindFile);
 
-    slider.setValue(checkSettings.timeoutSeconds);
+    // 按滑条自身范围钳制：还原自手改备份的越界值会让 Slider.setValue 抛 IllegalStateException
+    slider.setValue(Math.max(slider.getValueFrom(), Math.min(slider.getValueTo(), checkSettings.timeoutSeconds)));
     label.setText("校验超时(秒)：" + checkSettings.timeoutSeconds);
-    checkConcurrencySlider.setValue(checkSettings.concurrency);
+    checkConcurrencySlider.setValue(Math.max(checkConcurrencySlider.getValueFrom(),
+        Math.min(checkConcurrencySlider.getValueTo(), checkSettings.concurrency)));
     checkConcurrencyLabel.setText("并发校验数量：" + checkSettings.concurrency);
     cbSearch.setChecked(checkSettings.checkSearch);
     cbDiscovery.setChecked(checkSettings.checkDiscovery);
@@ -874,11 +895,14 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void runCheck(CheckSourceSettings settings, java.util.List<SourceRecord> targetList) {
+    // 运行守卫：解析/校验进行中时，右上角菜单的重验入口仍可点到这里，放行会并发启动第二个引擎
+    if (fetchRunning || checkRunning) { toast("已有任务在运行，请先停止再发起校验"); return; }
     List<SourceRecord> targets = new ArrayList<>(targetList);
     fetchRunning = false;
     checkRunning = true;
     checkCancelRequested = false;
     checkResults.clear();
+    refreshCheckSearchFilter();
     // 删除弹窗验证码的源 + 清理需要登录的源
     final java.util.List<SourceRecord> finalTargets;
     List<SourceRecord> afterCaptcha = targets;
@@ -920,6 +944,7 @@ public class MainActivity extends AppCompatActivity {
           if (destroyed) return;
           boolean wasCancelled = checkCancelRequested || engine.isCancelled();
           checkResults = results;
+          refreshCheckSearchFilter();
           if (wasCancelled) {
             Set<String> completed = new HashSet<>();
             for (CheckSourceResult item : results) if (item.source.getUrl() != null) completed.add(item.source.getUrl());
@@ -1045,6 +1070,12 @@ public class MainActivity extends AppCompatActivity {
         }
       }
     }
+  }
+
+  /** checkResults 被替换或清空后必须重新应用过滤，否则明细/导出仍操作旧一轮的列表。 */
+  private void refreshCheckSearchFilter() {
+    CharSequence kw = etCheckSearch == null || etCheckSearch.getText() == null ? "" : etCheckSearch.getText();
+    applyCheckSearch(kw.toString().trim());
   }
 
   /** 校验明细入口：先选状态筛选，再按耗时降序查看。 */
@@ -1212,6 +1243,7 @@ public class MainActivity extends AppCompatActivity {
     }
     result = new DedupeResult(result.getOriginalCount(), kept, newGroups, result.getInvalid());
     checkResults = newChecks;
+    refreshCheckSearchFilter();
     renderCheckStats();
     refreshExportPreview();
     toast("已移除选中书源，可从「解析网络源」重新去重");
@@ -1414,21 +1446,20 @@ public class MainActivity extends AppCompatActivity {
       // 清除旧的标记避免堆叠（兼容新旧格式）
       gs = gs.replaceAll("(?:,)?✔\\d{4}-\\d{1,2}-\\d{1,2}[^，^,]*（\\d+）", "");
       if (gs.startsWith(",")) gs = gs.substring(1);
-      m.put("bookSourceGroup", gs.isEmpty() ? mark : gs + "," + mark);
-      // 自动分类标签：按书源类型把分类追加到分组，便于阅读内部分组
+      // 组装最终分组：原分组 + 自动分类标签（若无）+ ✔日期标记。
+      // 必须基于同一份 parts 一次性写入：之前两处各自 put("bookSourceGroup", …)，
+      // 第二处基于不含标记的旧串重建，会把刚写入的日期标记覆盖掉。
+      List<String> groupParts = new ArrayList<>(Arrays.asList(gs.isEmpty() ? new String[0] : gs.split(",")));
       try {
         String kindLabel = SourceKind.of(s).label;
         if (kindLabel != null && !kindLabel.isEmpty()) {
-          List<String> groupParts = new ArrayList<>(Arrays.asList(gs.split(",")));
           boolean hasKind = false;
           for (String part : groupParts) if (part.trim().equals(kindLabel)) { hasKind = true; break; }
-          if (!hasKind) {
-            groupParts.add(kindLabel);
-            String joined = String.join(",", groupParts).replace(",,", ",");
-            m.put("bookSourceGroup", joined);
-          }
+          if (!hasKind) groupParts.add(kindLabel);
         }
       } catch (Exception ignored) {}
+      groupParts.add(mark);
+      m.put("bookSourceGroup", String.join(",", groupParts).replace(",,", ","));
       // attach check groups if any
       for (CheckSourceResult cr : checkResults) {
         if (cr.source.getUrl() != null && cr.source.getUrl().equals(s.getUrl()) && !cr.groups.isEmpty()) {
@@ -1660,9 +1691,10 @@ public class MainActivity extends AppCompatActivity {
     s.setDisplayZoomControls(false);
     yck.addJavascriptInterface(new YckBridge(this::collectYckUrl, this::batchCollectYckUrls), "YckDedupe");
     yckClient = new YckWebClient(new YckWebClient.Listener() {
-      public void onJsonLink(String u) { showJsonMenu(u); }
-      public void onExternal(String u) { toast("已拦截非 YCK 页面"); }
+      public void onJsonLink(String u) { if (destroyed) return; showJsonMenu(u); }
+      public void onExternal(String u) { if (!destroyed) toast("已拦截非 YCK 页面"); }
       public void onLoadError(String u) {
+        if (destroyed) return;
         if (!yckAutoFellBack) {
           yckAutoFellBack = true;
           YckSite other = yckSite == YckSite.BACKUP ? YckSite.MAIN : YckSite.BACKUP;
@@ -1676,6 +1708,7 @@ public class MainActivity extends AppCompatActivity {
         } else toast("站点加载失败，请检查网络后重试");
       }
       public void onPageFinished(String u) {
+        if (destroyed) return;
         yckAutoFellBack = false;
         yck.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
         injectYckCollector();
@@ -1731,8 +1764,9 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void injectYckCollector() {
-    yck.post(() -> yck.evaluateJavascript(YckCollectorScript.source(), null));
-    yck.postDelayed(() -> yck.evaluateJavascript(YckCollectorScript.source(), null), 800);
+    if (destroyed || yck == null) return;
+    yck.post(() -> { if (!destroyed && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); });
+    yck.postDelayed(() -> { if (!destroyed && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); }, 800);
   }
 
   private boolean appendUrlIfAbsent(String u) {
@@ -2047,7 +2081,8 @@ public class MainActivity extends AppCompatActivity {
 
   /** 导出校验结果为 CSV 文件（可在电脑上打开筛选排序）。 */
   private void exportCsv() {
-    List<CheckSourceResult> list = getCheckResultsForDisplay();
+    // 拷贝后再排序：getCheckResultsForDisplay() 返回的是共享列表，原地排序会永久改变明细/导出的展示顺序
+    List<CheckSourceResult> list = new ArrayList<>(getCheckResultsForDisplay());
     if (list.isEmpty()) { toast("没有可导出的数据"); return; }
     list.sort((a, b) -> Long.compare(b.respondTimeMs, a.respondTimeMs));
     StringBuilder sb = new StringBuilder();
@@ -2639,17 +2674,21 @@ public class MainActivity extends AppCompatActivity {
         .setTitle("校验历史（最近 " + checkHistory.size() + " 次）")
         .setItems(lines.toArray(new String[0]), (d, w) -> {
           CheckHistoryEntry e = snapshot.get(w);
+          // "重验"项按有无失败源条件加入，下标会整体后移：必须按实际加入位置分发，
+          // 否则全部成功的批次里点"取消"会打开快源排行
           List<String> opts = new ArrayList<>();
-          opts.add("查看该次失败源明细");
-          if (!e.badUrls.isEmpty()) opts.add("重验该次失败/超时源（" + e.badUrls.size() + " 条）");
-          opts.add("查看该次可用源最快/最慢");
+          final int idxDetail = opts.size(); opts.add("查看该次失败源明细");
+          final int idxRecheck;
+          if (!e.badUrls.isEmpty()) { idxRecheck = opts.size(); opts.add("重验该次失败/超时源（" + e.badUrls.size() + " 条）"); }
+          else idxRecheck = -1;
+          final int idxSpeed = opts.size(); opts.add("查看当前结果最快/最慢");
           opts.add("取消");
           new MaterialAlertDialogBuilder(this)
               .setTitle("第 " + (w + 1) + " 次校验")
               .setItems(opts.toArray(new String[0]), (d2, w2) -> {
-                if (w2 == 0) showHistoryBadDetail(e);
-                else if (w2 == 1) recheckUrls(e.badUrls, "该次失败源");
-                else if (w2 == 2) showHistorySpeed(e);
+                if (w2 == idxDetail) showHistoryBadDetail(e);
+                else if (w2 == idxRecheck) recheckUrls(e.badUrls, "该次失败源");
+                else if (w2 == idxSpeed) showHistorySpeed(e);
               })
               .show();
         })
@@ -2675,6 +2714,7 @@ public class MainActivity extends AppCompatActivity {
     new MaterialAlertDialogBuilder(this).setTitle("失败源明细").setView(sv).setPositiveButton("关闭", null).show();
   }
 
+  /** 展示当前校验结果中的最快可用源（历史记录未保存逐源耗时，无法回放某一次）。 */
   private void showHistorySpeed(CheckHistoryEntry e) {
     if (checkResults.isEmpty()) { toast("当前无校验结果可展示"); return; }
     List<CheckSourceResult> sorted = new ArrayList<>(checkResults);
@@ -2694,7 +2734,7 @@ public class MainActivity extends AppCompatActivity {
     sv.addView(tv);
     int maxH = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
     sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
-    new MaterialAlertDialogBuilder(this).setTitle("快源排序").setView(sv).setPositiveButton("关闭", null).show();
+    new MaterialAlertDialogBuilder(this).setTitle("当前结果快源排序").setView(sv).setPositiveButton("关闭", null).show();
   }
 
   /** 一键重验上次本次失败/超时源。 */

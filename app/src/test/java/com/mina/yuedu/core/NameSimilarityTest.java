@@ -34,6 +34,14 @@ public class NameSimilarityTest {
     assertEquals("笔趣阁", NameSimilarity.normalize("笔趣阁 官方 备用"));
   }
 
+  @Test public void normalizingHandlesIdeographicSpace() {
+    // 回归：Java 的 \s 和 trim() 都不处理全角空格(U+3000)，导致带全角空格的名称归一化后仍带尾随空格，
+    // 短名称相等判断失败，同站源无法合并
+    assertEquals("笔趣阁", NameSimilarity.normalize("笔趣阁　官方"));
+    assertEquals("笔趣阁", NameSimilarity.normalize("笔趣阁小说网　"));
+    assertTrue(NameSimilarity.isSimilar("笔趣阁", "笔趣阁　官方", 0.75));
+  }
+
   @Test public void similarNamesAreDetected() {
     // 名称相似但不同
     assertTrue(NameSimilarity.isSimilar("笔趣阁", "笔趣阁小说网", 0.75));

@@ -70,9 +70,12 @@ public final class HttpProbe {
   private static Response doFetch(AnalyzeUrlLite req, Map<String, String> sourceHeaders, int timeoutMs, Proxy proxy) throws Exception {
     if (Thread.currentThread().isInterrupted()) throw new InterruptedIOException("cancelled");
     long start = System.currentTimeMillis();
+    String url = req.url;
+    int hops = 0;
+    while (true) {
     HttpURLConnection c = proxy == null
-        ? (HttpURLConnection) new URL(req.url).openConnection()
-        : (HttpURLConnection) new URL(req.url).openConnection(proxy);
+        ? (HttpURLConnection) new URL(url).openConnection()
+        : (HttpURLConnection) new URL(url).openConnection(proxy);
     ACTIVE.add(c);
     if (Thread.currentThread().isInterrupted()) {
       ACTIVE.remove(c);
@@ -107,8 +110,24 @@ public final class HttpProbe {
         c.getOutputStream().write(req.body.getBytes(StandardCharsets.UTF_8));
       }
       int code = c.getResponseCode();
+      // JDK 不跟随跨协议重定向（http→https），只会拿到 301 短页导致误判"搜索失效"；
+      // 与 FetchManager 一致，见到 3xx 带 Location 就手动再跳一次（最多 5 跳）
+      if (code >= 300 && code < 400 && hops < 5) {
+        String loc = c.getHeaderField("Location");
+        if (loc != null && !loc.trim().isEmpty()) {
+          url = new URL(new URL(url), loc.trim()).toString();
+          hops++;
+          continue; // finally 会断开旧连接
+        }
+      }
       InputStream raw = code >= 400 ? c.getErrorStream() : c.getInputStream();
-      if (raw == null) raw = c.getInputStream();
+      if (raw == null) {
+        // 4xx/5xx 且服务器没给错误体时不能抛异常：状态码（含自定义可用码）要交给调用方判定
+        if (code >= 400) {
+          return new Response(code, "", url, System.currentTimeMillis() - start);
+        }
+        raw = c.getInputStream();
+      }
       String enc = c.getContentEncoding();
       // 与 FetchManager 保持一致：仅当 Content-Encoding 声明 gzip 且内容确实是 gzip 魔数时才解压，
       // 防止 Android 透明解压后二次解压导致误判"搜索失效"。
@@ -132,11 +151,11 @@ public final class HttpProbe {
           in.close();
         }
       }
-      String finalUrl = c.getURL() != null ? c.getURL().toString() : req.url;
-      return new Response(code, body, finalUrl, System.currentTimeMillis() - start);
+      return new Response(code, body, url, System.currentTimeMillis() - start);
     } finally {
       ACTIVE.remove(c);
       c.disconnect();
+    }
     }
   }
 

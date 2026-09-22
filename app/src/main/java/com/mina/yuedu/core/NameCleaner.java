@@ -9,6 +9,7 @@ public final class NameCleaner {
       if(cp==0x200B||cp==0x200C||cp==0x200D||cp==0xFEFF|| (cp>=0x1F000&&cp<=0x1FAFF) || (cp>=0x2600&&cp<=0x27BF)) continue;
       b.appendCodePoint(cp);
     }
-    return b.toString().replaceAll("\\s+"," ").trim();
+    // Java 的 \s 不含全角空格(U+3000)/不间断空格，中文书名里极常见，必须一并归一
+    return b.toString().replaceAll("[\\s\\u3000\\u00A0\\u2007\\u202F]+", " ").trim();
   }
 }

@@ -19,6 +19,15 @@
             android:textSize="20sp"
             android:textStyle="bold" />
 
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="14dp"
+            android:text="检测步骤"
+            android:textColor="@color/md_theme_primary"
+            android:textSize="15sp"
+            android:textStyle="bold" />
+
         <com.google.android.material.card.MaterialCardView
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -125,7 +134,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="过滤"
+            android:text="过滤条件"
             android:textColor="@color/md_theme_on_surface"
             android:textSize="15sp"
             android:textStyle="bold" />
@@ -162,6 +171,15 @@
                 android:maxLines="1"
                 android:text="@string/check_source_keyword_default" />
         </com.google.android.material.textfield.TextInputLayout>
+
+        <TextView
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="请求参数"
+            android:textColor="@color/md_theme_on_surface"
+            android:textSize="15sp"
+            android:textStyle="bold" />
 
         <com.google.android.material.textfield.TextInputLayout
             style="@style/Widget.Material3.TextInputLayout.FilledBox"

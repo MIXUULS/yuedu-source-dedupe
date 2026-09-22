@@ -20,7 +20,7 @@ public final class DedupeEngine {
         buckets.computeIfAbsent(k, x->new ArrayList<>()).add(v);
       }catch(Exception e){ invalid.add(new InvalidSource(InvalidSource.Kind.INVALID_URL, u)); }
     }
-    return buildResult(sources.size(), buckets, mode, clean);
+    return buildResult(sources.size(), buckets, mode, clean, invalid);
   }
 
   /** 按名称相似度去重。 */
@@ -58,13 +58,7 @@ public final class DedupeEngine {
     return buildResult(sources.size(), buckets, DedupeMode.NAME, clean, invalid);
   }
 
-  /** 从 buckets 构建最终结果。 */
-  private static DedupeResult buildResult(int total, Map<String, List<SourceRecord>> buckets,
-                                           DedupeMode mode, boolean clean) {
-    return buildResult(total, buckets, mode, clean, new ArrayList<InvalidSource>());
-  }
-
-  /** 从 buckets 构建最终结果（携带外部传入的 invalid 列表）。 */
+  /** 从 buckets 构建最终结果（invalid 为本次运行收集的无效源，必须传入，否则无效源会凭空消失）。 */
   private static DedupeResult buildResult(int total, Map<String, List<SourceRecord>> buckets,
                                            DedupeMode mode, boolean clean, List<InvalidSource> invalid) {
     List<SourceRecord> kept = new ArrayList<>();
@@ -92,8 +86,8 @@ public final class DedupeEngine {
     Object en=s.getRaw().get("enabled");
     if(!(en instanceof Boolean) || (Boolean)en) n+=5;
     Object t=s.getRaw().get("lastUpdateTime");
-    if(t instanceof Number) n += (int)Math.min(50, ((Number)t).longValue() / 1_000_000_000L);
-    else if(t!=null){ try{ n += (int)Math.min(50, Long.parseLong(String.valueOf(t)) / 1_000_000_000L);}catch(Exception ignored){} }
+    if(t instanceof Number) n += recencyBonus(((Number)t).longValue());
+    else if(t!=null){ try{ n += recencyBonus(Long.parseLong(String.valueOf(t)));}catch(Exception ignored){} }
     // 规则完整性：有完整规则的书源优先保留
     for(String rk: new String[]{"ruleSearch","ruleBookInfo","ruleToc","ruleContent","ruleExplore"}){
       Object rv=s.getRaw().get(rk);
@@ -108,6 +102,13 @@ public final class DedupeEngine {
       else if (len <= 10) n += 3; // 简洁名称
     }
     return n;
+  }
+  /** 新近度加分：最近更新 50 分起，每满 30 天衰减 1 分，下限 0。lastUpdateTime 是毫秒时间戳，
+   *  旧公式除以 1e9 对任何真实时间戳都恒超过上限，等于只有"有无时间戳"之分。 */
+  static int recencyBonus(long epochMs){
+    long days = (System.currentTimeMillis() - epochMs) / 86_400_000L;
+    if(days < 0) days = 0;
+    return 50 - (int)Math.min(50, days / 30);
   }
   private static String reason(DedupeMode m){
     if(m==DedupeMode.AGGRESSIVE) return "激进模式下域名相同";

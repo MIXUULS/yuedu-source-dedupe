@@ -27,7 +27,10 @@ public final class FetchManager {
       }
       inFlight++; return currentBucket.get(bucketIndex++);
     }
-    public synchronized void complete(boolean ok, int count){ if(inFlight>0) inFlight--; completed++; if(ok) succeeded++; else failed++; sources+=Math.max(0,count); }
+    /** 下载结束（无论成败）时释放并发槽位；解析在串行队列里异步进行，不能等解析完才释放，
+     *  否则解析积压时 takeNext 会因并发已满返回 null，worker 误以为队列取空而提前退出，剩余 URL 丢失。 */
+    public synchronized void downloadDone(){ if(inFlight>0) inFlight--; }
+    public synchronized void complete(boolean ok, int count){ completed++; if(ok) succeeded++; else failed++; sources+=Math.max(0,count); }
     public synchronized void cancel(boolean keep){ cancelled=true; keepLoaded=keep; domainBuckets.clear(); currentBucket=null; }
     public synchronized boolean shouldKeepLoaded(){ return keepLoaded; }
     public synchronized boolean isCancelled(){ return cancelled; }
@@ -118,7 +121,10 @@ public final class FetchManager {
               listener.onProgress(state.progress());
             }
           });
+          // 下载已完成，立即释放并发槽位，让 worker 能继续取下一个 URL（解析异步进行）
+          state.downloadDone();
         }catch(Exception e){
+          state.downloadDone();
           state.complete(false, 0);
           state.clearDownloading();
           String msg = e.getMessage();

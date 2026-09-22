@@ -1,13 +1,17 @@
 package com.mina.yuedu.core;
 import java.util.*;
 public final class MiniJson {
- private final String s;private int p;private MiniJson(String s){this.s=s;}
+ /** 递归深度上限：所有入口都 catch Exception，若不设限，深层嵌套输入（如 "[[[[…"）
+  *  会抛出 StackOverflowError 这种 Error，绕过 catch 直接闪退。 */
+ private static final int MAX_DEPTH = 256;
+ private final String s;private int p;private int depth;private MiniJson(String s){this.s=s;}
  public static Object parse(String s){MiniJson j=new MiniJson(s);Object v=j.value();j.ws();if(j.p!=s.length())throw new IllegalArgumentException("trailing JSON");return v;}
  private Object value(){ws();if(p>=s.length())throw new IllegalArgumentException("unexpected end");char c=s.charAt(p);if(c=='{')return object();if(c=='[')return array();if(c=='"')return string();if(c=='t'&&take("true"))return true;if(c=='f'&&take("false"))return false;if(c=='n'&&take("null"))return null;return number();}
- private Map<String,Object> object(){p++;Map<String,Object> m=new LinkedHashMap<>();ws();if(ch('}'))return m;do{ws();String k=string();ws();need(':');m.put(k,value());ws();}while(ch(','));need('}');return m;}
- private List<Object> array(){p++;List<Object> a=new ArrayList<>();ws();if(ch(']'))return a;do{a.add(value());ws();}while(ch(','));need(']');return a;}
+ private Map<String,Object> object(){enter();p++;Map<String,Object> m=new LinkedHashMap<>();ws();if(ch('}')){depth--;return m;}do{ws();String k=string();ws();need(':');m.put(k,value());ws();}while(ch(','));need('}');depth--;return m;}
+ private List<Object> array(){enter();p++;List<Object> a=new ArrayList<>();ws();if(ch(']')){depth--;return a;}do{a.add(value());ws();}while(ch(','));need(']');depth--;return a;}
+ private void enter(){if(++depth>MAX_DEPTH)throw new IllegalArgumentException("JSON nesting too deep (>"+MAX_DEPTH+") at "+p);}
  private String string(){need('"');StringBuilder b=new StringBuilder();while(p<s.length()){char c=s.charAt(p++);if(c=='"')return b.toString();if(c=='\\'){if(p>=s.length())throw new IllegalArgumentException("escape");char e=s.charAt(p++);if(e=='u'){if(p+4>s.length())throw new IllegalArgumentException("\\u escape truncated");String hex=s.substring(p,p+4);int cp;try{cp=Integer.parseInt(hex,16);}catch(NumberFormatException nfe){throw new IllegalArgumentException("bad \\u escape \\u"+hex);}p+=4;b.append((char)cp);}else{String x="\"\\/bfnrt";String y="\"\\/\b\f\n\r\t";int i=x.indexOf(e);if(i<0)throw new IllegalArgumentException("escape "+Integer.toHexString(e)+" at "+(p-1));b.append(y.charAt(i));}}else b.append(c);}throw new IllegalArgumentException("string");}
- private Number number(){int b=p;while(p<s.length()&&"-+0123456789.eE".indexOf(s.charAt(p))>=0)p++;String n=s.substring(b,p);boolean fp=n.indexOf('.')>=0||n.indexOf('e')>=0||n.indexOf('E')>=0;if(fp)return Double.valueOf(n);try{return Long.valueOf(n);}catch(NumberFormatException e){return Double.valueOf(n);}}
+ private Number number(){int b=p;while(p<s.length()&&"-+0123456789.eE".indexOf(s.charAt(p))>=0)p++;String n=s.substring(b,p);boolean fp=n.indexOf('.')>=0||n.indexOf('e')>=0||n.indexOf('E')>=0;if(fp){try{return Double.valueOf(n);}catch(NumberFormatException e){throw new IllegalArgumentException("bad number at "+b);}}try{return Long.valueOf(n);}catch(NumberFormatException e){throw new IllegalArgumentException(n.isEmpty()?"unexpected character at "+b:"bad number at "+b);}}
  private boolean take(String x){if(s.startsWith(x,p)){p+=x.length();return true;}return false;}private void ws(){while(p<s.length()&&Character.isWhitespace(s.charAt(p)))p++;}private boolean ch(char c){if(p<s.length()&&s.charAt(p)==c){p++;return true;}return false;}private void need(char c){if(!ch(c))throw new IllegalArgumentException("expected "+c+" at "+p);}
  public static String stringify(Object v){ return stringify(v, 0); }
   /** cap 为最外层容器预估容量（字节），减少大列表导出时 StringBuilder 反复扩容拷贝导致的 OOM。 */
