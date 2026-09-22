@@ -1,4 +1,4 @@
-# 阅读书源去重 v3.5.0
+# 阅读书源去重 v3.7.0
 
 **仓库：** https://github.com/MIXUULS/yuedu-source-dedupe
 **上游：** Mina-kk/yuedu-source-dedupe（remote: upstream）
@@ -33,4 +33,4 @@
 - 装机: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - Release APK: `app/build/outputs/apk/release/app-release.apk`
 
-**状态：** 工作区干净，已推送(6a578b2)，v3.5.0 就绪
+**状态：** v3.7.0 已推送到 origin/main；远程标签 v3.7.0 已存在，Release APK 已在 GitHub 页面上传。工作区仅保留本地构建缓存/截图等未跟踪临时文件。
