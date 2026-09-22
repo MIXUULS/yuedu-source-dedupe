@@ -1,7 +1,7 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.6.0-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.0-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
   <a><img src="https://img.shields.io/badge/Android-7.0%2B-34A853.svg" alt="Android"></a>
@@ -43,14 +43,14 @@
 
 | 版本 | APK 大小 | 说明 |
 |------|----------|------|
-| 本社区版 v3.6.0 | **~2 MB** | R8 压缩，正式签名 |
+| 本社区版 v3.7.0 | **~2 MB** | R8 压缩，正式签名 |
 | 上游 v3.0.5 | ~6.8 MB | 未压缩 |
 
-当前版本：**v3.6.0**（versionCode 310）· 正式签名发布版
+当前版本：**v3.7.0**（versionCode 310）· 正式签名发布版
 
 ## 📝 更新日志
 
-### v3.6.0
+### v3.7.0
 
 - 新增名称相似度去重（NAME 模式），按 Levenshtein 距离 + 关键词归一化合并同名镜像站
 - 新增全选/反选按钮，校验明细批量操作更便捷
@@ -69,6 +69,17 @@
 - 校验设置弹窗增加检测步骤、过滤条件、请求参数和书源类型分区
 - 修复首页顶部内容被 Tab 栏遮挡的问题
 - 保持轻量体积，不新增图片资源和第三方依赖
+
+### v3.6.0
+
+- 新增名称相似度去重（NAME 模式），按 Levenshtein 距离 + 关键词归一化合并同名镜像站
+- 新增全选/反选按钮，校验明细批量操作更便捷
+- 修复 runCheck 缺失 cleanLogin 过滤，校验时同时应用两种过滤
+- 修复 SourceHealthTracker 评分边界漏洞（avg=3000~10000 区间空档）
+- 修复校验超时 Slider 最小值 0→1 秒，避免静默回退
+- 优化排版布局，统一文字样式并改善长文本可读性
+- 启用 R8 代码压缩，release APK 从 5MB 降至 2MB
+- 导出分组标签改为按类型分别标记，如 ✔2026-8-23小说（120）
 
 ### v3.5.0
 
