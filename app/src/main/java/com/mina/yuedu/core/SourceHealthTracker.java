@@ -44,6 +44,13 @@ public final class SourceHealthTracker {
     public long totalResponseMs;
     public long lastCheckTime;
     public double score; // 0-100
+    /**
+     * 创建序号：用于上限淘汰时的稳定排序。
+     *
+     * 不能依赖 lastCheckTime 排序——批量校验时大量记录的时间戳落在同一毫秒，
+     * 排序不稳定会导致刚插入的新记录被误删。
+     */
+    long seq;
 
     public HealthRecord(String url, String name) {
       this.url = url;
@@ -114,12 +121,33 @@ public final class SourceHealthTracker {
 
   private final Map<String, HealthRecord> records = new LinkedHashMap<>();
 
+  /**
+   * 记录数量上限。
+   *
+   * 原实现 records 只增不减：用户换过几批书源后，旧书源的健康记录仍常驻内存，
+   * 万级书源 × 每条最多 20 个快照约 10MB，长期使用会持续膨胀（且这份数据会被
+   * 序列化成十几 MB 的 JSON 存进 SharedPreferences）。
+   * 这里设上限并在超限时淘汰"最久未校验"的记录。
+   */
+  public static final int MAX_RECORDS = 20000;
+
+  /** 记录超过多少天未校验就淘汰。 */
+  public static final long STALE_DAYS = 90;
+
+  /** 创建序号计数器：每次新建 HealthRecord 时递增，用于淘汰时区分同毫秒记录。 */
+  private long seqCounter;
+
+  /** 批量写入期间抑制逐条淘汰，由 recordBatch 控制。 */
+  private boolean suppressPrune;
+
   /** 记录单次校验结果。 */
   public void recordCheck(SourceRecord source, CheckSourceResult result) {
     if (source == null || source.getUrl() == null) return;
     HealthRecord r = records.get(source.getUrl());
-    if (r == null) {
+    boolean isNew = r == null;
+    if (isNew) {
       r = new HealthRecord(source.getUrl(), source.getName());
+      r.seq = seqCounter++;
       records.put(source.getUrl(), r);
     }
     r.name = source.getName();
@@ -128,7 +156,46 @@ public final class SourceHealthTracker {
         result.isUsable(),
         result.respondTimeMs,
         result.message));
+    // 淘汰必须放在 addSnapshot 之后：新记录的 lastCheckTime 在那之前还是 0，
+    // 排序时会排到最前被立刻误删（这正是最初版本的缺陷）。
+    if (isNew && !suppressPrune) enforceLimits();
   }
+
+  /**
+   * 上限保护：先按时间淘汰过期记录，再按"最久未校验"淘汰直到不超过上限。
+   *
+   * 淘汰顺序刻意选"最久未校验"——健康看板按评分排序展示，
+   * 但这些记录的价值取决于新鲜度；很久没校验过的条目既不准也没人看。
+   *
+   * 两个关键细节：
+   *  1. 按 lastCheckTime 排序在同一毫秒内不稳定（批量校验时大量时间戳相同），
+   *     次级键用创建序号 seq，越晚创建的越安全。
+   *  2. 调用方必须在 addSnapshot **之后**调用（新记录在此之前 lastCheckTime 还是 0，
+   *     会排到最前被误删）。
+   */
+  private void enforceLimits() {
+    if (records.isEmpty()) return;
+    long cutoff = System.currentTimeMillis() - STALE_DAYS * 24L * 60L * 60L * 1000L;
+    records.values().removeIf(r -> r.lastCheckTime > 0 && r.lastCheckTime < cutoff);
+    if (records.size() <= MAX_RECORDS) return;
+
+    List<HealthRecord> sorted = new ArrayList<>(records.values());
+    Collections.sort(sorted, (a, b) -> {
+      int byTime = Long.compare(a.lastCheckTime, b.lastCheckTime);
+      if (byTime != 0) return byTime;
+      return Long.compare(a.seq, b.seq); // 同级时早创建的优先淘汰
+    });
+    int toRemove = records.size() - MAX_RECORDS;
+    for (int i = 0; i < toRemove && i < sorted.size(); i++) {
+      records.remove(sorted.get(i).url);
+    }
+  }
+
+  /** 当前记录数量（供测试与诊断）。 */
+  public int size() { return records.size(); }
+
+  /** 淘汰过期/超额记录（应用启动时可主动调用一次）。 */
+  public void prune() { enforceLimits(); }
 
   /** 批量记录校验结果。 */
   public void recordBatch(List<SourceRecord> sources, List<CheckSourceResult> results) {
@@ -137,11 +204,20 @@ public final class SourceHealthTracker {
     for (CheckSourceResult r : results) {
       if (r.source.getUrl() != null) resultMap.put(r.source.getUrl(), r);
     }
-    for (SourceRecord s : sources) {
-      if (s.getUrl() == null) continue;
-      CheckSourceResult r = resultMap.get(s.getUrl());
-      if (r != null) recordCheck(s, r);
+    // 批量期间抑制逐条淘汰：否则一次校验几千条会有几千次全量排序，
+    // 复杂度 O(n² log n)，万级校验会明显卡顿。结束时统一做一次。
+    boolean prev = suppressPrune;
+    suppressPrune = true;
+    try {
+      for (SourceRecord s : sources) {
+        if (s.getUrl() == null) continue;
+        CheckSourceResult r = resultMap.get(s.getUrl());
+        if (r != null) recordCheck(s, r);
+      }
+    } finally {
+      suppressPrune = prev;
     }
+    enforceLimits();
   }
 
   /** 获取某个源的健康记录。 */
@@ -174,6 +250,8 @@ public final class SourceHealthTracker {
       m.put("success", r.successCount);
       m.put("totalMs", r.totalResponseMs);
       m.put("lastCheck", r.lastCheckTime);
+      // 保存创建序号：否则重启后所有记录 seq 都是 0，上限淘汰时无法区分新旧
+      m.put("seq", r.seq);
       List<Object> snaps = new ArrayList<>();
       for (Snapshot s : r.history) {
         Map<String, Object> sm = new LinkedHashMap<>();
@@ -204,6 +282,9 @@ public final class SourceHealthTracker {
       r.successCount = intOf(m.get("success"));
       r.totalResponseMs = longOf(m.get("totalMs"));
       r.lastCheckTime = longOf(m.get("lastCheck"));
+      // 恢复创建序号；旧存档没有该字段时兜底分配递增号，保持"已存在记录早于新建记录"的语义
+      r.seq = m.get("seq") instanceof Number ? ((Number) m.get("seq")).longValue() : seqCounter;
+      seqCounter = Math.max(seqCounter, r.seq + 1);
       Object h = m.get("history");
       if (h instanceof List) {
         for (Object so : (List<Object>) h) {
