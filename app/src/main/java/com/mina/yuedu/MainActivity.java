@@ -1496,18 +1496,8 @@ public class MainActivity extends AppCompatActivity {
 
   private List<SourceRecord> exportRecords() {
     if (result == null) return Collections.emptyList();
-    List<SourceRecord> base;
-    if (!onlyUsable || checkResults.isEmpty()) {
-      base = result.getRetained();
-    } else {
-      Set<String> good = new HashSet<>();
-      for (CheckSourceResult r : checkResults) if (r.isUsable() && r.source.getUrl() != null) good.add(r.source.getUrl());
-      base = new ArrayList<>();
-      for (SourceRecord s : result.getRetained()) if (s.getUrl() != null && good.contains(s.getUrl())) base.add(s);
-    }
-    Set<SourceKind> allow = selectedExportKinds();
-    if (allow.isEmpty()) return Collections.emptyList();
-    return SourceKind.filter(base, allow);
+    return ExportRecordSelector.select(
+        result.getRetained(), checkResults, onlyUsable, selectedExportKinds());
   }
 
   private List<Object> exportPayload() {
@@ -1610,7 +1600,7 @@ public class MainActivity extends AppCompatActivity {
         if (j == null) { toast("没有可保存的数据"); return; }
         pendingSave = j;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-        createDoc.launch("去重_" + list.size() + "_" + d + ".json");
+        createDoc.launch(ExportNaming.dedupeJson(list.size(), d));
       });
     }, "export-json").start();
   }
@@ -2151,7 +2141,7 @@ public class MainActivity extends AppCompatActivity {
         if (json == null) { toast("生成失败"); return; }
         pendingSave = json;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-        createDoc.launch("去重_" + cat + "_" + list.size() + "_" + d + ".json");
+        createDoc.launch(ExportNaming.categoryJson(cat, list.size(), d));
       });
     }, "export-cat").start();
   }
@@ -2166,7 +2156,7 @@ public class MainActivity extends AppCompatActivity {
     if (csv == null) { toast("没有可导出的数据"); return; }
     pendingSave = csv;
     String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-    csvDoc.launch("校验结果_" + list.size() + "_" + d + ".csv");
+    csvDoc.launch(ExportNaming.checkCsv(list.size(), d));
   }
 
   /** 展示同域合并校验结果（A1搜索失败+A2发现失败→合并后搜索+发现都成功）。 */
@@ -2311,7 +2301,7 @@ public class MainActivity extends AppCompatActivity {
         if (json == null) { toast("生成失败"); return; }
         pendingSave = json;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-        createDoc.launch("分享书源_" + records.size() + "_" + d + ".json");
+        createDoc.launch(ExportNaming.shareJson(records.size(), d));
       });
     }, "share-save").start();
   }
@@ -2493,7 +2483,7 @@ public class MainActivity extends AppCompatActivity {
 
     pendingSave = SettingsBackup.toJson(s);
     String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-    createDoc.launch("书源工具设置备份_" + d + ".json");
+    createDoc.launch(ExportNaming.settingsBackup(d));
   }
 
   /** 从备份 JSON 还原核心设置。 */
@@ -3004,7 +2994,7 @@ public class MainActivity extends AppCompatActivity {
           rep.put("generatedAt", new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA).format(new Date()));
           pendingSave = MiniJson.stringify(rep);
           String date = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
-          createDoc.launch("变更报告_" + date + ".json");
+          createDoc.launch(ExportNaming.changeReport(date));
         })
         .setPositiveButton("关闭", null)
         .show();
