@@ -9,6 +9,7 @@ import java.io.PushbackInputStream;
 import java.net.HttpURLConnection;
 import java.net.Proxy;
 import java.net.URL;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -146,7 +147,7 @@ public final class HttpProbe {
             if (total > MAX) throw new IOException("response too large (" + total + ")");
             out.write(buf, 0, n);
           }
-          body = out.toString(StandardCharsets.UTF_8.name());
+          body = decode(out.toByteArray(), c.getContentType());
         } finally {
           in.close();
         }
@@ -156,6 +157,117 @@ public final class HttpProbe {
       ACTIVE.remove(c);
       c.disconnect();
     }
+    }
+  }
+
+  /**
+   * 按真实编码把响应字节解成字符串。
+   *
+   * 旧实现无条件用 UTF-8 解码，导致大量 GBK/GB2312 老站（国内书源里很常见）中文全部变成
+   * 替换符，页面正文长度和关键词都判不出来，被误判成"搜索失效/正文失效"。
+   *
+   * 判定顺序：BOM → Content-Type charset → 页面 meta 嗅探 → 默认。
+   * BOM 放在最前是因为它是字节级事实，服务器把 charset 声明写错的情况很常见。
+   */
+  public static String decode(byte[] data, String contentType) {
+    if (data == null || data.length == 0) return "";
+    Charset bom = sniffBom(data);
+    Charset charset = bom != null ? bom : charsetFromContentType(contentType);
+    if (charset == null) charset = sniffFromContent(data);
+    if (charset == null) charset = StandardCharsets.UTF_8;
+    String text = new String(data, charset);
+    // UTF-8 BOM 会被解成开头一个 U+FEFF，留着会让 startsWith("{") 之类的判断全部失效
+    if (bom == StandardCharsets.UTF_8 && !text.isEmpty() && text.charAt(0) == '\uFEFF') {
+      text = text.substring(1);
+    }
+    return text;
+  }
+
+  /** 从 Content-Type 头里取 charset 参数，例如 "text/html; charset=gbk"。 */
+  private static Charset charsetFromContentType(String contentType) {
+    if (contentType == null) return null;
+    int i = contentType.toLowerCase(Locale.ROOT).indexOf("charset=");
+    if (i < 0) return null;
+    String cs = contentType.substring(i + "charset=".length()).trim();
+    int semi = cs.indexOf(';');
+    if (semi >= 0) cs = cs.substring(0, semi);
+    cs = cs.trim().replace("\"", "").replace("'", "");
+    return toCharset(cs);
+  }
+
+  /** BOM 是最可靠的编码标记，优先级高于任何声明。 */
+  private static Charset sniffBom(byte[] d) {
+    if (d.length >= 3 && (d[0] & 0xFF) == 0xEF && (d[1] & 0xFF) == 0xBB && (d[2] & 0xFF) == 0xBF) {
+      return StandardCharsets.UTF_8;
+    }
+    if (d.length >= 2 && (d[0] & 0xFF) == 0xFE && (d[1] & 0xFF) == 0xFF) return StandardCharsets.UTF_16BE;
+    if (d.length >= 2 && (d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xFE) return StandardCharsets.UTF_16LE;
+    return null;
+  }
+
+  /** 纯 ASCII 内容任何单字节编码结果都一样，无需嗅探。 */
+  private static boolean isMostlyAscii(byte[] d) {
+    int limit = Math.min(d.length, 4096);
+    for (int i = 0; i < limit; i++) if ((d[i] & 0xFF) > 0x7F) return false;
+    return true;
+  }
+
+  /** 宽松地把名称解析成 Charset，无法识别时返回 null（不抛异常）。 */
+  private static Charset toCharset(String name) {
+    if (name == null) return null;
+    String n = name.trim();
+    if (n.isEmpty()) return null;
+    // 常见的"非标准但被广泛使用"的别名
+    String lower = n.toLowerCase(Locale.ROOT);
+    if (lower.equals("gb2312") || lower.equals("gbk") || lower.equals("gb-2312")) {
+      // GB18030 是 GBK/GB2312 的超集，用它解码老站不会丢字
+      try { return Charset.forName("GB18030"); } catch (Exception ignored) {}
+    }
+    if (lower.equals("utf8")) return StandardCharsets.UTF_8;
+    try { return Charset.forName(n); } catch (Exception ignored) { return null; }
+  }
+
+  /**
+   * 内容嗅探器。Android 的 UniversalDetector 需要额外依赖，这里用 JDK 自带的
+   * 页面 meta 扫描 + 严格 UTF-8 校验，覆盖书源校验的绝大多数场景且零依赖。
+   */
+  private static Charset sniffFromContent(byte[] data) {
+    // 先看 HTML 头部声明的 meta charset（只看前 4KB，声明一定在头部）
+    int limit = Math.min(data.length, 4096);
+    String head = new String(data, 0, limit, StandardCharsets.ISO_8859_1).toLowerCase(Locale.ROOT);
+    int m = head.indexOf("charset");
+    while (m >= 0) {
+      int eq = head.indexOf('=', m);
+      if (eq > 0) {
+        int end = eq + 1;
+        while (end < head.length()) {
+          char ch = head.charAt(end);
+          if (ch == '"' || ch == '\'' || ch == '>' || ch == ';' || ch == ' ') break;
+          end++;
+        }
+        Charset cs = toCharset(head.substring(eq + 1, end));
+        if (cs != null) return cs;
+      }
+      m = head.indexOf("charset", m + 7);
+    }
+    // 没有声明：能按严格 UTF-8 解通就当 UTF-8，否则按 GB18030（国内老站默认）
+    return isValidUtf8(data) ? StandardCharsets.UTF_8 : gb18030OrNull();
+  }
+
+  private static Charset gb18030OrNull() {
+    try { return Charset.forName("GB18030"); } catch (Exception e) { return null; }
+  }
+
+  /** 严格校验 UTF-8 合法性（错误的 UTF-8 序列在 GBK 站点很常见）。 */
+  private static boolean isValidUtf8(byte[] d) {
+    try {
+      java.nio.charset.CharsetDecoder dec = StandardCharsets.UTF_8.newDecoder()
+          .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+          .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT);
+      dec.decode(java.nio.ByteBuffer.wrap(d, 0, Math.min(d.length, 65536)));
+      return true;
+    } catch (Exception e) {
+      return false;
     }
   }
 

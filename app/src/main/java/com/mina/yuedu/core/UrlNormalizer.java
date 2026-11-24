@@ -31,7 +31,7 @@ public final class UrlNormalizer {
     URI u = new URI(parts[0]);
     validate(raw, u);
     String scheme = u.getScheme().toLowerCase(Locale.ROOT);
-    String host = u.getHost().toLowerCase(Locale.ROOT);
+    String host = hostOf(raw, u).toLowerCase(Locale.ROOT);
     if (hostOnly) host = host.replaceFirst("^www\\.", "");
     int port = u.getPort();
     boolean def = (scheme.equals("http") && port == 80) || (scheme.equals("https") && port == 443);
@@ -48,6 +48,49 @@ public final class UrlNormalizer {
     return key;
   }
 
+  /**
+   * 取主机名。
+   *
+   * {@code URI.getHost()} 只认 RFC 3986 的 reg-name，遇到中文域名（例子.com）或带下划线的主机名
+   * （a_b.com）会返回 null，原先直接拿它做非空校验，导致这类书源被整条判成"非法 URL"丢弃。
+   * 这里按 URI → IDN 转 ASCII → URL 的顺序兜底，任一层拿到主机名即可。
+   */
+  private static String hostOf(String raw, URI u) throws URISyntaxException {
+    String host = u.getHost();
+    if (host != null && !host.trim().isEmpty()) return host.trim();
+    // 中文域名：先 IDN 转 punycode 再交给 URI
+    try {
+      String ascii = java.net.IDN.toASCII(rawHostCandidate(u)).toLowerCase(Locale.ROOT);
+      URI again = new URI(u.getScheme() + "://" + ascii + "/");
+      String h = again.getHost();
+      if (h != null && !h.trim().isEmpty()) return h.trim();
+    } catch (Exception ignored) {
+      // 非法 IDN（含乱码/超长标签）继续尝试下一层
+    }
+    // 最后用 URL 兜底：它能处理带下划线的主机名
+    try {
+      String h = new java.net.URL(u.getScheme() + "://" + rawHostCandidate(u) + "/").getHost();
+      if (h != null && !h.trim().isEmpty()) return h.trim();
+    } catch (Exception ignored) {
+      // ignore
+    }
+    throw new URISyntaxException(raw, "missing host");
+  }
+
+  /** 从 URI 的 authority 里手工剥离端口，得到主机名原文（忽略 userInfo）。 */
+  private static String rawHostCandidate(URI u) {
+    String auth = u.getRawAuthority();
+    if (auth == null) return "";
+    int at = auth.lastIndexOf('@');
+    if (at >= 0) auth = auth.substring(at + 1);
+    if (auth.startsWith("[")) { // IPv6 字面量
+      int close = auth.indexOf(']');
+      if (close > 0) return auth.substring(0, close + 1);
+    }
+    int colon = auth.indexOf(':');
+    return colon >= 0 ? auth.substring(0, colon) : auth;
+  }
+
   private static String[] splitIdentity(String raw) throws URISyntaxException {
     if (raw == null) throw new URISyntaxException("null", "missing URL");
     String s = raw.trim();
@@ -60,7 +103,9 @@ public final class UrlNormalizer {
   }
 
   private static void validate(String raw, URI u) throws URISyntaxException {
-    if (u.getScheme() == null || u.getHost() == null) throw new URISyntaxException(raw, "missing scheme or host");
+    // 只看 scheme：主机名的校验交给 hostOf()，因为它对中文域名/下划线主机名需要多层兜底，
+    // 这里再用 URI.getHost() 判空会把那类合法书源直接挡掉。
+    if (u.getScheme() == null) throw new URISyntaxException(raw, "missing scheme");
     String scheme = u.getScheme().toLowerCase(Locale.ROOT);
     if (!scheme.equals("http") && !scheme.equals("https")) throw new URISyntaxException(raw, "unsupported scheme");
   }
@@ -76,6 +121,6 @@ public final class UrlNormalizer {
       kept.add(part);
     }
     Collections.sort(kept);
-    return String.join("&", kept);
+    return TextKit.join("&", kept);
   }
 }

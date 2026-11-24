@@ -45,7 +45,9 @@ public final class DedupeEngine {
     for (List<SourceRecord> group : nameGroups) {
       String key = NameSimilarity.normalize(group.get(0).getName());
       key = key.isEmpty() ? group.get(0).getName() : key;
-      buckets.put(key, new ArrayList<>(group));
+      // 不能直接 put：不同分组可能归一化出同一个 key（如 "A站"/"a 站"），
+      // 直接覆盖会让前一组的书源既不进 retained 也不进 duplicate，凭空消失。
+      buckets.computeIfAbsent(key, x -> new ArrayList<>()).addAll(group);
       grouped.addAll(group);
     }
     // 未分组的单独加入

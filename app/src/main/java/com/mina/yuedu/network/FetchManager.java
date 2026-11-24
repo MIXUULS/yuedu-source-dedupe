@@ -68,6 +68,7 @@ public final class FetchManager {
     return t;
   });
   private final Set<HttpURLConnection> active=Collections.synchronizedSet(new HashSet<>());
+  /** 最近一轮任务的队列与监听器，供 cancel() 外部调用使用；worker 内部一律用自己那份参数。 */
   private volatile QueueState state; private volatile FetchListener listener; private final AtomicInteger workers=new AtomicInteger();
   private final int maxBytes = 64 * 1024 * 1024; // 万级大合集书源包可达 30-50MB，上限放宽到 64MB
   public synchronized void start(List<String> urls, int concurrency, FetchListener l){
@@ -78,19 +79,24 @@ public final class FetchManager {
       String domain = extractDomain(url);
       buckets.computeIfAbsent(domain, k -> new ArrayList<>()).add(url);
     }
-    state=new QueueState(new ArrayDeque<>(buckets.values()), concurrency);
-    listener=l; listener.onProgress(state.progress());
+    // 把本轮任务状态作为参数传进 worker，而不是让 worker 每次去读字段 state：
+    // 上一轮的 worker 可能还没退出（解析队列在收尾），此时字段已被换成新任务，
+    // 旧 worker 会从新队列里抢 URL、把结果写进新任务，造成数据错乱。
+    final QueueState newState = new QueueState(new ArrayDeque<>(buckets.values()), concurrency);
+    final FetchListener newListener = l;
+    state=newState;
+    listener=newListener; newListener.onProgress(newState.progress());
     workers.set(concurrency);
-    for(int i=0;i<concurrency;i++) new Thread(this::work, "source-fetch-"+i).start();
+    for(int i=0;i<concurrency;i++) new Thread(() -> work(newState, newListener), "source-fetch-"+i).start();
   }
   public void cancel(boolean keep){ QueueState s=state; if(s==null) return; s.cancel(keep); synchronized(active){ for(HttpURLConnection c:new ArrayList<>(active)) c.disconnect(); } }
-  private void work(){
+  private void work(final QueueState myState, final FetchListener myListener){
     try{
       while(true){
-        String url=state.takeNext(); if(url==null) break;
-        state.setDownloading(url, -1);
+        String url=myState.takeNext(); if(url==null) break;
+        myState.setDownloading(url, -1);
         try{
-          String body=fetch(url);
+          String body=fetch(myState, myListener, url);
           // 内容级回退：直连拿到了非 JSON 内容（DNS 污染/被墙错误页，HTTP 200 但内容错误）时，
           // 自动用系统代理重试一次——无需用户判断哪些源需要梯子。
           Proxy sysProxy = SystemProxy.get();
@@ -98,7 +104,7 @@ public final class FetchManager {
             String t = body == null ? "" : body.trim();
             if (!t.startsWith("{") && !t.startsWith("[")) {
               try {
-                body = doFetch(url, sysProxy);
+                body = doFetch(myState, myListener, url, sysProxy);
               } catch (Exception ignored) {
                 // 代理也失败则保留直连内容（可能是 YCK HTML 页面，走后续提取逻辑）
               }
@@ -109,28 +115,28 @@ public final class FetchManager {
           parseQueue.execute(() -> {
             try {
               SourceParser.ParseResult parsed = SourceParser.parseArray(finalBody, 0);
-              state.complete(true, parsed.getRecords().size());
-              listener.onItem(url, finalBody, parsed);
+              myState.complete(true, parsed.getRecords().size());
+              myListener.onItem(url, finalBody, parsed);
             } catch (Exception e) {
-              state.complete(false, 0);
+              myState.complete(false, 0);
               String msg = e.getMessage();
               if (msg == null || msg.trim().isEmpty()) msg = e.getClass().getSimpleName();
-              listener.onFailure(url, e.getClass().getSimpleName() + ":" + msg);
+              myListener.onFailure(url, e.getClass().getSimpleName() + ":" + msg);
             } finally {
-              state.clearDownloading();
-              listener.onProgress(state.progress());
+              myState.clearDownloading();
+              myListener.onProgress(myState.progress());
             }
           });
           // 下载已完成，立即释放并发槽位，让 worker 能继续取下一个 URL（解析异步进行）
-          state.downloadDone();
+          myState.downloadDone();
         }catch(Exception e){
-          state.downloadDone();
-          state.complete(false, 0);
-          state.clearDownloading();
+          myState.downloadDone();
+          myState.complete(false, 0);
+          myState.clearDownloading();
           String msg = e.getMessage();
           if(msg==null || msg.trim().isEmpty()) msg = e.getClass().getSimpleName();
-          listener.onFailure(url, e.getClass().getSimpleName()+":"+msg);
-          listener.onProgress(state.progress());
+          myListener.onFailure(url, e.getClass().getSimpleName()+":"+msg);
+          myListener.onProgress(myState.progress());
         }
       }
     } finally {
@@ -139,18 +145,18 @@ public final class FetchManager {
         parseQueue.shutdown();
         try { parseQueue.awaitTermination(10, TimeUnit.MINUTES); }
         catch (InterruptedException e) { Thread.currentThread().interrupt(); }
-        listener.onFinished(state.isCancelled(), state.shouldKeepLoaded());
+        myListener.onFinished(myState.isCancelled(), myState.shouldKeepLoaded());
       }
     }
   }
-  private String fetch(String url) throws Exception {
+  private String fetch(QueueState st, FetchListener ls, String url) throws Exception {
     Exception last = null;
     for (int attempt = 1; attempt <= FetchPolicy.MAX_ATTEMPTS; attempt++) {
-      if (state != null && state.isCancelled()) {
+      if (st != null && st.isCancelled()) {
         throw last != null ? last : new IOException("cancelled");
       }
       try {
-        return doFetchWithFallback(url);
+        return doFetchWithFallback(st, ls, url);
       } catch (Exception e) {
         last = e;
         if (!FetchPolicy.isRetryable(e)) throw e;
@@ -161,33 +167,33 @@ public final class FetchManager {
     throw last != null ? last : new IOException("fetch failed");
   }
 
-  private String doFetchWithFallback(String url) throws Exception {
+  private String doFetchWithFallback(QueueState st, FetchListener ls, String url) throws Exception {
     Exception directErr = null;
     try {
-      return doFetch(url, Proxy.NO_PROXY);
+      return doFetch(st, ls, url, Proxy.NO_PROXY);
     } catch (Exception e) {
       directErr = e;
-      if (state != null && state.isCancelled()) throw e;
+      if (st != null && st.isCancelled()) throw e;
       if (!FetchPolicy.isRetryable(e)) throw e;
     }
     // 依次尝试：系统代理（梯子/手动代理）→ 本机回退代理
     Proxy sys = SystemProxy.get();
     if (sys != null) {
       try {
-        return doFetch(url, sys);
+        return doFetch(st, ls, url, sys);
       } catch (Exception e2) {
         if (directErr != null) throw directErr;
         throw e2;
       }
     }
     try {
-      return doFetch(url, new Proxy(Proxy.Type.HTTP, new InetSocketAddress(PROXY_HOST, PROXY_PORT)));
+      return doFetch(st, ls, url, new Proxy(Proxy.Type.HTTP, new InetSocketAddress(PROXY_HOST, PROXY_PORT)));
     } catch (Exception e2) {
       if (directErr != null) throw directErr;
       throw e2;
     }
   }
-  private String doFetch(String url, Proxy proxy) throws Exception {
+  private String doFetch(QueueState st, FetchListener ls, String url, Proxy proxy) throws Exception {
     HttpURLConnection c = open(url, proxy);
     active.add(c);
     try{
@@ -205,7 +211,7 @@ public final class FetchManager {
         hops++;
       }
       long contentLen = c.getContentLengthLong();
-      if (contentLen > 0) state.setDownloading(url, contentLen);
+      if (contentLen > 0) st.setDownloading(url, contentLen);
       if(code < 200 || code >= 300) throw new IOException("HTTP "+code);
       InputStream raw = c.getErrorStream()!=null && code>=400 ? c.getErrorStream() : c.getInputStream();
       if (raw == null) throw new IOException("empty body");
@@ -217,12 +223,14 @@ public final class FetchManager {
           total+=n;
           if(total>maxBytes) throw new IOException("response too large ("+total+")");
           out.write(b,0,n);
-          state.addDownloaded(n);
+          st.addDownloaded(n);
           // 大文件下载中实时上报进度，避免界面长时间"不动"
-          if(total - lastReport >= PROGRESS_REPORT_BYTES){ lastReport=total; listener.onProgress(state.progress()); }
+          if(total - lastReport >= PROGRESS_REPORT_BYTES){ lastReport=total; ls.onProgress(st.progress()); }
         }
         if(total==0) throw new IOException("empty body");
-        return out.toString("UTF-8");
+        // 复用校验引擎的编码识别：书源包也可能由 GBK 站点生成，
+        // 硬编 UTF-8 会让中文名变成替换符（去重/导出后写回脏数据）。
+        return com.mina.yuedu.check.HttpProbe.decode(out.toByteArray(), c.getContentType());
       } finally { in.close(); }
     } finally { active.remove(c); c.disconnect(); }
   }

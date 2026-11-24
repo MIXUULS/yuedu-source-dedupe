@@ -70,4 +70,44 @@ public class DedupeEngineTest {
     assertEquals("A", r.getRetained().get(0).getName());
     assertTrue(DedupeEngine.recencyBonus(now) > DedupeEngine.recencyBonus(now - 400L * 365L * 86_400_000L));
   }
+
+  /**
+   * 回归：NAME 模式曾用 buckets.put(key, …) 直接写入。不同分组若归一化出同一个 key
+   * （例如 "A站" 与 "a 站" 都归一化成 "a"），后一组会覆盖前一组，
+   * 导致前一组的书源既不在 retained 也不在重复组里——凭空消失。
+   * 这里校验计数守恒：原始 = 保留 + 重复 + 无效。
+   */
+  @Test public void nameModeKeepsCountInvariantWhenNormalizedKeysCollide() {
+    List<SourceRecord> sources = Arrays.asList(
+        source(0, "测试书城", "https://x1.com"),
+        source(1, "测试书屋", "https://x2.com"),   // 归一化后同为 "测试"
+        source(2, "另一个站", "https://y1.com"),
+        source(3, "另一个站", "https://y2.com"),
+        source(4, "缺URL", null));
+    DedupeResult r = DedupeEngine.run(sources, DedupeMode.NAME, false);
+    assertEquals("计数必须守恒", r.getOriginalCount(),
+        r.getRetained().size() + r.getDuplicateCount() + r.getInvalid().size());
+    assertEquals(1, r.getInvalid().size());
+    // 被合并掉的书源必须能在重复组里找到，不能凭空消失
+    int groupedRemoved = 0;
+    for (com.mina.yuedu.model.DuplicateGroup g : r.getDuplicateGroups()) {
+      groupedRemoved += g.getRemoved().size();
+    }
+    assertEquals("重复数应等于重复组内被移除的总数", r.getDuplicateCount(), groupedRemoved);
+  }
+
+  /** NAME 模式下每条输入书源都必须有归宿：保留、重复、或无效。 */
+  @Test public void nameModeEverySourceHasDestination() {
+    List<SourceRecord> sources = Arrays.asList(
+        source(0, "同一站", "https://a.com"),
+        source(1, "同一站", "https://b.com"),
+        source(2, "独立站", "https://c.com"));
+    DedupeResult r = DedupeEngine.run(sources, DedupeMode.NAME, false);
+    java.util.Set<String> accounted = new java.util.HashSet<>();
+    for (SourceRecord s : r.getRetained()) accounted.add(s.getName() + "|" + s.getUrl());
+    for (com.mina.yuedu.model.DuplicateGroup g : r.getDuplicateGroups()) {
+      for (SourceRecord s : g.getRemoved()) accounted.add(s.getName() + "|" + s.getUrl());
+    }
+    assertEquals(sources.size(), accounted.size());
+  }
 }

@@ -24,13 +24,40 @@
 ## 核心类
 - SourceCleaner: cleanLogin+deleteCaptcha 过滤(11项测试)
 - SourceHealthTracker: 历次校验记录+评分+建议+JSON持久化
-- SourceDiff: 版本对比diff(6项测试)
+- SourceDiff: 版本对比diff
+- TextKit: join/isBlank/abbreviate（替代 API26 的 String.join，minSdk 24 必须用它）
+- SessionState: 跨配置变更保留书源/校验结果（深色模式切换不丢数据）
+- ResultPruner: 剔除书源时同步 retained/duplicateGroups/checkResults 三份数据
+- UrlHistory: 最近 URL（去重/置顶/上限 10）
+- CheckResultFilter: 校验结果搜索过滤（null=未启用过滤）
+- CheckHistoryStore: 校验历史汇总/截断(20)/JSON 编解码
+- ExportPayloadBuilder: 导出时的分组标签与校验备注改写
+- CsvBuilder: 校验结果导出 CSV（含 UTF-8 BOM，Excel 中文不乱码）
+- SettingsBackup: 设置备份/还原（宽类型解析，不会半途失败留下半套配置）
 
 ## 构建
 - Debug: `./gradlew assembleDebug`
 - Release: `./gradlew assembleRelease`
-- 测试: `./gradlew testDebugUnitTest`
+- 测试: `./gradlew testDebugUnitTest`（177 项，24 个套件）
+- Lint: `./gradlew lintDebug`（当前 Error 0）
 - 装机: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - Release APK: `app/build/outputs/apk/release/app-release.apk`
 
-**状态：** v3.7.0 已推送到 origin/main；远程标签 v3.7.0 已存在，Release APK 已在 GitHub 页面上传。工作区仅保留本地构建缓存/截图等未跟踪临时文件。
+## 开发注意事项（踩过的坑）
+- **不要用 `String.join` / `StringJoiner`**：API 26 才有，minSdk 24 上会 `NoSuchMethodError` 闪退，
+  且属于 Error，`catch (Exception)` 拦不住。统一用 `TextKit.join`。
+- **不要用 `URI.getHost()` 判定主机名是否为空**：中文域名与带下划线的主机名会返回 null，
+  导致合法书源被整条丢弃。统一走 `UrlNormalizer.hostOf()`（URI → IDN → URL 三层兜底）。
+- **不要往 Bundle 里放书源**：数万条会超过 Binder 1MB 上限，直接 `TransactionTooLargeException`。
+  需要跨配置变更保留就用 `SessionState` + `onRetainCustomNonConfigurationInstance`。
+- **任何异步回调都要带代际守卫**：`fetchGen` / `recomputeGen` / `checkGen` 三套，
+  清空、重新解析、重新校验时都要自增作废在途回调，否则旧结果会覆盖新状态。
+- **URL 输入框不要在循环里逐条 `setText`**：O(n²)，批量场景会卡死，先合并再一次写入。
+- **主线程不要做大 JSON 序列化/解析**：健康数据、导出 payload 都必须在后台线程。
+- **单元测试固定 UTF-8**：`testOptions { unitTests.all { systemProperty("file.encoding","UTF-8") } }` 已配好，
+  涉及中文与 URL 编码的用例在默认 GBK 的机器上会误报，改动时不要删掉这段配置。
+
+**状态：** v3.7.0 已推送到 origin/main；2026-11-24 完成两轮全量代码审查修复
+（30 类问题、109 项测试通过、GBK 环境亦通过、debug+release 构建通过、Lint Error 0）。
+随后完成重构阶段 1：把 7 段纯逻辑从 MainActivity 抽出为可测类
+（177 项测试全绿，MainActivity 2958 → 2784 行）。改动尚未提交。

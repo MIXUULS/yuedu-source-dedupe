@@ -40,3 +40,6 @@ Thumbs.db
 .superpowers/
 .reasonix/
 AGENTS.md
+
+# 重构期间的本地基线备份
+.refactor-backup/

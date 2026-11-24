@@ -63,6 +63,14 @@ android {
     packaging {
         resources { excludes += "/META-INF/{AL2.0,LGPL2.1}" }
     }
+    testOptions {
+        unitTests.all {
+            // 单元测试里涉及中文与 URL 百分号编码（AnalyzeUrlLite 等），结果依赖 JVM 默认字符集。
+            // 不固定的话，在默认 GBK 的机器上跑会误报失败（例如 expected kw=%B4%CA but was kw=%E8%AF%8D）。
+            it.systemProperty("file.encoding", "UTF-8")
+            it.defaultCharacterEncoding = "UTF-8"
+        }
+    }
 }
 dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")

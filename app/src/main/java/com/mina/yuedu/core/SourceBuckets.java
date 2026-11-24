@@ -9,5 +9,8 @@ public final class SourceBuckets {
   public boolean isEmpty(){ return local.isEmpty() && network.isEmpty(); }
   public int localCount(){ return local.size(); } public int networkCount(){ return network.size(); }
   public List<SourceRecord> all(){ List<SourceRecord> out=new ArrayList<>(local.size()+network.size()); out.addAll(local); out.addAll(network); return out; }
+  /** 只读快照，供配置变更时保留数据；返回新列表，调用方改动不影响内部状态。 */
+  public List<SourceRecord> localSnapshot(){ return new ArrayList<>(local); }
+  public List<SourceRecord> networkSnapshot(){ return new ArrayList<>(network); }
   public void clearAll(){ local.clear(); network.clear(); }
 }

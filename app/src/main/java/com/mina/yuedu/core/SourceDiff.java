@@ -55,12 +55,53 @@ public final class SourceDiff {
       SourceRecord rb = mapB.get(url);
       if (ra == null) added.add(url);
       else if (rb == null) removed.add(url);
-      else if (!String.valueOf(ra.getRaw().get("bookSourceName")).equals(String.valueOf(rb.getRaw().get("bookSourceName")))
-          || !String.valueOf(ra.getRaw()).equals(String.valueOf(rb.getRaw()))) {
+      else if (!sameContent(ra, rb)) {
         modified.add(url + "  「" + ra.getName() + "」");
       }
     }
     return new Result(mapA, mapB, added, removed, modified);
+  }
+
+  /**
+   * 判断两条记录内容是否等价。
+   *
+   * 不能用 {@code String.valueOf(map)} 比较：{@code AbstractMap.toString()} 按迭代顺序输出，
+   * 两份语义相同但键顺序不同的书源会被误判为"已修改"（导出顺序一变就满屏假差异）。
+   * 这里改用 MiniJson 序列化（null 与空串归一化后）比较，键顺序不影响结果。
+   */
+  private static boolean sameContent(SourceRecord a, SourceRecord b) {
+    String nameA = a.getRaw().get("bookSourceName") == null ? "" : String.valueOf(a.getRaw().get("bookSourceName"));
+    String nameB = b.getRaw().get("bookSourceName") == null ? "" : String.valueOf(b.getRaw().get("bookSourceName"));
+    if (!nameA.equals(nameB)) return false;
+    return canonical(a).equals(canonical(b));
+  }
+
+  /** 把书源序列化成与键顺序无关的稳定文本（顶层与嵌套对象都按键排序）。 */
+  private static String canonical(SourceRecord s) {
+    try {
+      return MiniJson.stringify(sortKeys(s.getRaw()));
+    } catch (Exception e) {
+      // 极端情况下（不可序列化的值）退化为直接比较，宁可报差异也不要抛异常中断对比
+      return String.valueOf(s.getRaw());
+    }
+  }
+
+  /** 递归把 Map 换成 TreeMap，保证嵌套结构也按键排序。 */
+  @SuppressWarnings("unchecked")
+  private static Object sortKeys(Object value) {
+    if (value instanceof Map) {
+      java.util.TreeMap<String, Object> sorted = new java.util.TreeMap<>();
+      for (Map.Entry<?, ?> e : ((Map<?, ?>) value).entrySet()) {
+        sorted.put(String.valueOf(e.getKey()), sortKeys(e.getValue()));
+      }
+      return sorted;
+    }
+    if (value instanceof List) {
+      List<Object> out = new ArrayList<>(((List<?>) value).size());
+      for (Object item : (List<?>) value) out.add(sortKeys(item));
+      return out;
+    }
+    return value;
   }
 
   /** 是否无差异（两份内容一致）。 */

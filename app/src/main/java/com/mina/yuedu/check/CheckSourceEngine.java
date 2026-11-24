@@ -1,5 +1,6 @@
 package com.mina.yuedu.check;
 
+import com.mina.yuedu.core.TextKit;
 import com.mina.yuedu.core.UrlNormalizer;
 import com.mina.yuedu.model.SourceRecord;
 import com.mina.yuedu.network.SystemProxy;
@@ -138,7 +139,7 @@ public final class CheckSourceEngine {
         return new CheckSourceResult(source, CheckSourceResult.Status.SUCCESS, groups, "校验成功", cost, kind, succeededSteps);
       }
       return new CheckSourceResult(source, CheckSourceResult.Status.FAILED, groups,
-          String.join(",", groups), cost, kind, succeededSteps);
+          TextKit.join(",", groups), cost, kind, succeededSteps);
     } catch (Exception e) {
       if (cancelled || Thread.currentThread().isInterrupted()) return null;
       groups.add("网站失效");

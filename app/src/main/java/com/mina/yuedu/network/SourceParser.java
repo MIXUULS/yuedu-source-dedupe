@@ -109,8 +109,33 @@ public final class SourceParser {
     if (arr >= 0 && (obj < 0 || arr < obj)) { start = arr; closer = ']'; }
     else if (obj >= 0) { start = obj; closer = '}'; }
     if (start < 0) return s.trim();
-    int end = s.lastIndexOf(closer);
+    // 不能直接用 lastIndexOf(closer)：页面/日志尾部常带别的 ] 或 }，
+    // 会把后面的无关文本一起截进来导致 JSON 解析失败。
+    // 这里按括号配对扫描（字符串与转义感知），找到与起始括号真正配对的那个结尾。
+    int end = matchingClose(s, start, closer);
     if (end > start) return s.substring(start, end + 1);
     return s.substring(start);
+  }
+
+  /** 从 start 处的开括号出发，返回与之配对的闭括号下标；不平衡时返回 -1。 */
+  private static int matchingClose(String s, int start, char closer) {
+    char opener = closer == ']' ? '[' : '{';
+    int depth = 0;
+    boolean inStr = false;
+    for (int i = start; i < s.length(); i++) {
+      char c = s.charAt(i);
+      if (inStr) {
+        if (c == '\\') i++;
+        else if (c == '"') inStr = false;
+        continue;
+      }
+      if (c == '"') inStr = true;
+      else if (c == opener) depth++;
+      else if (c == closer) {
+        depth--;
+        if (depth == 0) return i;
+      }
+    }
+    return -1;
   }
 }
