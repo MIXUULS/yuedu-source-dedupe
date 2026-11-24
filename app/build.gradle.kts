@@ -70,6 +70,7 @@ android {
             it.systemProperty("file.encoding", "UTF-8")
             it.defaultCharacterEncoding = "UTF-8"
         }
+        unitTests.isIncludeAndroidResources = true
     }
 }
 dependencies {
@@ -83,4 +84,9 @@ dependencies {
     // 二维码生成（生成分享书源的二维码，仅用 core，无 Android UI 依赖）
     implementation("com.google.zxing:core:3.5.3")
     testImplementation("junit:junit:4.13.2")
+    // Robolectric：仅在本地单元测试里跑真实的 Android 框架（Activity 生命周期、SharedPreferences 等）。
+    // 它只进 testImplementation，不会打进 APK，不影响安装包体积与运行时行为。
+    testImplementation("org.robolectric:robolectric:4.13")
+    testImplementation("androidx.test:core:1.6.1")
+    testImplementation("androidx.test.ext:junit:1.2.1")
 }
