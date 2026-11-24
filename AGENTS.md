@@ -34,11 +34,23 @@
 - ExportPayloadBuilder: 导出时的分组标签与校验备注改写
 - CsvBuilder: 校验结果导出 CSV（含 UTF-8 BOM，Excel 中文不乱码）
 - SettingsBackup: 设置备份/还原（宽类型解析，不会半途失败留下半套配置）
+- ExportRecordSelector: 决定导出范围（仅可用过滤 → 类型过滤）
+- ExportNaming: 文件名生成 + 非法字符清洗（含 null/纯分隔符兜底）
+- CheckTargetPreparer: 校验前清理编排（验证码源 → 登录源 → 规则完整度）
+- UrlInputParser: URL 输入切分/合并/序列化/剪贴板提取
+- OrderAssigner: 全局顺序号分配（自带锁，消除"必须在 buckets 锁内调用"的隐式约定）
+
+## 测试基建
+- Robolectric 4.13（仅 testImplementation，不进 APK）
+- MainActivityBehaviorTest：Activity 生命周期 / 配置变更 / 代际守卫 / 剪贴板分支
+  * 配置变更必须用 `ActivityController.recreate()`，手动 finish+新建**不会**传递
+    onRetainCustomNonConfigurationInstance
+  * 项目用 AppCompat AlertDialog，ShadowAlertDialog 抓不到；用 ShadowDialog.getShownDialogs()
 
 ## 构建
 - Debug: `./gradlew assembleDebug`
 - Release: `./gradlew assembleRelease`
-- 测试: `./gradlew testDebugUnitTest`（177 项，24 个套件）
+- 测试: `./gradlew testDebugUnitTest`（250 项，31 个套件）
 - Lint: `./gradlew lintDebug`（当前 Error 0）
 - 装机: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - Release APK: `app/build/outputs/apk/release/app-release.apk`
@@ -57,7 +69,11 @@
 - **单元测试固定 UTF-8**：`testOptions { unitTests.all { systemProperty("file.encoding","UTF-8") } }` 已配好，
   涉及中文与 URL 编码的用例在默认 GBK 的机器上会误报，改动时不要删掉这段配置。
 
-**状态：** v3.7.0 已推送到 origin/main；2026-11-24 完成两轮全量代码审查修复
-（30 类问题、109 项测试通过、GBK 环境亦通过、debug+release 构建通过、Lint Error 0）。
-随后完成重构阶段 1：把 7 段纯逻辑从 MainActivity 抽出为可测类
-（177 项测试全绿，MainActivity 2958 → 2784 行）。改动尚未提交。
+**状态：** v3.7.0 已推送到 origin/main（未推送新提交）。
+2026-11-24 完成：两轮全量审查修复（30 类缺陷）+ 重构阶段 1&2。
+共 5 次提交：a6203c2 缺陷修复 → 9e02709 Robolectric 安全网 → 263c5f7 校验目标/URL 解析
+→ 9fa0ccf 导出范围/文件名 → 23ee2d0 OrderAssigner。
+测试 89 → 250 项（31 套件，0 失败），Lint Error 0，debug+release 通过。
+真机（PJD110/Android 17）验证：2257 条书源去重结果一致、
+深色模式重建后数据保留、清空后旧结果不复活、无崩溃。
+MainActivity 2958 → 2775 行，抽出 17 个可测类。
