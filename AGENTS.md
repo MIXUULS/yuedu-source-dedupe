@@ -1,4 +1,4 @@
-# 阅读书源去重 v3.7.0
+# 阅读书源去重 v3.7.1
 
 **仓库：** https://github.com/MIXUULS/yuedu-source-dedupe
 **上游：** Mina-kk/yuedu-source-dedupe（remote: upstream）
@@ -69,10 +69,10 @@
 - **单元测试固定 UTF-8**：`testOptions { unitTests.all { systemProperty("file.encoding","UTF-8") } }` 已配好，
   涉及中文与 URL 编码的用例在默认 GBK 的机器上会误报，改动时不要删掉这段配置。
 
-**状态：** v3.7.0 已推送到 origin/main（未推送新提交）。
+**状态：** v3.7.1（versionCode 311）准备发布。
 2026-11-24 完成：两轮全量审查修复（30 类缺陷）+ 重构阶段 1&2。
-共 5 次提交：a6203c2 缺陷修复 → 9e02709 Robolectric 安全网 → 263c5f7 校验目标/URL 解析
-→ 9fa0ccf 导出范围/文件名 → 23ee2d0 OrderAssigner。
+共 6 次提交：a6203c2 缺陷修复 → 9e02709 Robolectric 安全网 → 263c5f7 校验目标/URL 解析
+→ 9fa0ccf 导出范围/文件名 → 23ee2d0 OrderAssigner → 1474f8d 文档。
 测试 89 → 250 项（31 套件，0 失败），Lint Error 0，debug+release 通过。
 真机（PJD110/Android 17）验证：2257 条书源去重结果一致、
 深色模式重建后数据保留、清空后旧结果不复活、无崩溃。
