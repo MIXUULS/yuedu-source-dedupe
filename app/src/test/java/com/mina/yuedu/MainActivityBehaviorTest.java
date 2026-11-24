@@ -235,4 +235,71 @@ public class MainActivityBehaviorTest {
     SharedPreferences again = ctx.getSharedPreferences("yuedu_dedupe", Context.MODE_PRIVATE);
     assertEquals(DedupeMode.AGGRESSIVE.name(), again.getString("mode", null));
   }
+
+  // ---------- 粘贴导入 ----------
+
+  /**
+   * 剪贴板里是「地址列表」时要能识别（不再被判成"不是书源 JSON"拒绝）。
+   *
+   * 只验证到"对话框已创建"这一层：项目用的是 androidx.appcompat.app.AlertDialog，
+   * Robolectric 的 ShadowAlertDialog 只跟踪 android.app.AlertDialog，抓不到按钮。
+   * 按钮点击后的填充逻辑由 UrlInputParserTest 覆盖（纯逻辑，已充分测试）。
+   * 这样既守住了"识别分支正确"，又不依赖脆弱的对话框穿透。
+   */
+  @Test public void pasteImport_recognizesUrlList() throws Exception {
+    setClipboard("https://a.com/json\nhttps://b.com/json\nhttps://a.com/json");
+    invokePrivate("pasteImport");
+    assertNotNull("地址列表应被识别并弹出确认对话框，而不是直接拒绝", latestDialog());
+  }
+
+  /** 书源 JSON 同样应弹出确认对话框。 */
+  @Test public void pasteImport_recognizesJson() throws Exception {
+    setClipboard("[{\"bookSourceName\":\"A\",\"bookSourceUrl\":\"https://a.com\"}]");
+    invokePrivate("pasteImport");
+    assertNotNull("JSON 应被识别并弹出确认对话框", latestDialog());
+  }
+
+  /** 既不是 JSON 也不是地址时，不弹任何对话框。 */
+  @Test public void pasteImport_ignoresUnrelatedText() throws Exception {
+    setClipboard("这是一段普通说明文字，没有地址");
+    invokePrivate("pasteImport");
+    assertNull("无关文本不应弹出导入对话框", latestDialog());
+
+    android.widget.EditText et = castField(activity, "etUrls");
+    String text = et.getText() == null ? "" : et.getText().toString();
+    assertTrue("无关文本不应填入输入框，实际: " + text, text.trim().isEmpty());
+  }
+
+  // ---------- 辅助 ----------
+
+  private void setClipboard(String text) {
+    android.content.ClipboardManager cm = (android.content.ClipboardManager)
+        ApplicationProvider.getApplicationContext().getSystemService(Context.CLIPBOARD_SERVICE);
+    cm.setPrimaryClip(android.content.ClipData.newPlainText("test", text));
+  }
+
+  private void invokePrivate(String name) throws Exception {
+    java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod(name);
+    m.setAccessible(true);
+    m.invoke(activity);
+  }
+
+  /**
+   * 取最近创建的对话框。
+   *
+   * Robolectric 会为每个 Dialog 创建一个 ShadowDialog 并记录在
+   * ShadowDialog.getShownDialogs() 里；AppCompat 的 AlertDialog 也是 Dialog 子类，
+   * 因此从这条路径能拿到它（ShadowAlertDialog 那条路只覆盖框架 AlertDialog）。
+   */
+  private android.app.Dialog latestDialog() {
+    java.util.List<android.app.Dialog> shown = org.robolectric.shadows.ShadowDialog.getShownDialogs();
+    if (shown == null || shown.isEmpty()) return null;
+    return shown.get(shown.size() - 1);
+  }
+
+  private static int countOccurrences(String haystack, String needle) {
+    int count = 0, idx = 0;
+    while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
+    return count;
+  }
 }

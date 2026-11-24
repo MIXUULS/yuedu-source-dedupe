@@ -454,11 +454,8 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private List<String> getUrls() {
-    List<String> x = new ArrayList<>();
     CharSequence cs = etUrls.getText();
-    if (cs == null) return x;
-    for (String s : cs.toString().split("\\r?\\n")) if (!s.trim().isEmpty()) x.add(s.trim());
-    return x;
+    return UrlInputParser.parse(cs == null ? null : cs.toString());
   }
 
   private void startParse() {
@@ -1026,19 +1023,10 @@ public class MainActivity extends AppCompatActivity {
     checkCancelRequested = false;
     checkResults.clear();
     refreshCheckSearchFilter();
-    // 删除弹窗验证码的源 + 清理需要登录的源
-    final java.util.List<SourceRecord> finalTargets;
-    List<SourceRecord> afterCaptcha = targets;
-    if (settings.deleteCaptcha) {
-      afterCaptcha = SourceCleaner.cleanCaptcha(targets);
-    }
-    if (settings.cleanLogin) {
-      finalTargets = SourceCleaner.cleanLogin(afterCaptcha);
-    } else {
-      finalTargets = afterCaptcha;
-    }
-    int incompleteRules = 0;
-    for (SourceRecord source : finalTargets) if (!RuleCompleteness.isComplete(source)) incompleteRules++;
+    // 删除弹窗验证码的源 + 清理需要登录的源（顺序与统计规则见 CheckTargetPreparer）
+    CheckTargetPreparer.Prepared prepared = CheckTargetPreparer.prepare(targets, settings);
+    final java.util.List<SourceRecord> finalTargets = prepared.targets;
+    int incompleteRules = prepared.incompleteRules;
     if (incompleteRules > 0) toast("校验前诊断：" + incompleteRules + " 条书源缺少部分规则，结果会标明失败步骤");
     cardRunning.setVisibility(View.VISIBLE);
     setTaskRunning(true);
@@ -1852,9 +1840,10 @@ public class MainActivity extends AppCompatActivity {
     String clean = u == null ? "" : u.trim();
     if (clean.isEmpty()) return false;
     CharSequence cur = etUrls.getText();
-    String s = cur == null ? "" : cur.toString();
-    for (String x : s.split("\\r?\\n")) if (x.trim().equals(clean)) return false;
-    etUrls.setText(s.trim().isEmpty() ? clean : s + "\n" + clean);
+    List<String> existing = UrlInputParser.parse(cur == null ? null : cur.toString());
+    if (existing.contains(clean)) return false;
+    existing.add(clean);
+    etUrls.setText(UrlInputParser.format(existing));
     // 光标移到末尾：批量收集几十条后默认停在开头，再手动输入会插到最前面
     etUrls.setSelection(etUrls.getText() == null ? 0 : etUrls.getText().length());
     return true;
@@ -2426,12 +2415,30 @@ public class MainActivity extends AppCompatActivity {
     CharSequence clip = cm.getPrimaryClip().getItemAt(0).getText();
     if (clip == null || clip.toString().trim().isEmpty()) { toast("剪贴板中没有文本内容"); return; }
     final String text = clip.toString().trim();
+    // 剪贴板里可能有两种东西：书源 JSON，或一串待解析的 JSON 地址。
+    // 原来只认 JSON，粘贴地址列表会被判成"不是书源 JSON"直接拒绝。
+    final boolean looksJson = text.startsWith("[") || text.startsWith("{");
+    final List<String> urls = looksJson ? new ArrayList<String>() : UrlInputParser.extractUrls(text);
     final String hint = text.length() > 120 ? text.substring(0, 120) + "…" : text;
+
+    if (!looksJson && urls.isEmpty()) { toast("剪贴板里没有可识别的书源 JSON 或地址"); return; }
+
+    String message = looksJson
+        ? "将剪贴板内容解析为书源并入去重流程：\n\n" + hint + "\n\n确认吗？"
+        : "将把剪贴板中的 " + urls.size() + " 个地址填入地址栏：\n\n" + hint + "\n\n确认吗？";
+
     new MaterialAlertDialogBuilder(this)
         .setTitle("从剪贴板导入书源")
-        .setMessage("将剪贴板内容解析为书源并入去重流程：\n\n" + hint + "\n\n确认吗？")
+        .setMessage(message)
         .setPositiveButton("导入", (d, w) -> {
-          if (!(text.startsWith("[") || text.startsWith("{"))) { toast("剪贴板内容不是书源 JSON"); return; }
+          if (!looksJson) {
+            // 地址列表：合并进输入框（保序去重），再走正常的网络解析流程
+            List<String> merged = UrlInputParser.merge(getUrls(), urls);
+            etUrls.setText(UrlInputParser.format(merged));
+            etUrls.setSelection(etUrls.getText() == null ? 0 : etUrls.getText().length());
+            toast("已添加 " + urls.size() + " 个地址，点「解析网络源」开始");
+            return;
+          }
           new Thread(() -> {
             final SourceParser.ParseResult p = SourceParser.parseArray(text, 0);
             runOnUiThread(() -> {
