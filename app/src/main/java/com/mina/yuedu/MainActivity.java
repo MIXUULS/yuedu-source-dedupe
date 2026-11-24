@@ -90,7 +90,9 @@ public class MainActivity extends AppCompatActivity {
   private volatile int fetchGen;
   /** 校验轮次代际号：与 fetchGen 同理，让上一轮引擎的回调失效。 */
   private volatile int checkGen;
-  private int concurrency = 4, nextOrder, localFileCount, currentTab;
+  private int concurrency = 4, localFileCount, currentTab;
+  /** 全局顺序号分配器：自带锁，避免"必须在 buckets 锁内调用"这条隐式约定被漏掉。 */
+  private final OrderAssigner orderAssigner = new OrderAssigner();
   /** 去重计算串行执行器：连续切换模式/开关时不并发跑多份万级去重（避免 CPU/内存打满）。 */
   private java.util.concurrent.ExecutorService recomputeExecutor;
   private CheckSourceSettings checkSettings = new CheckSourceSettings();
@@ -147,7 +149,7 @@ public class MainActivity extends AppCompatActivity {
       checkResults = kept.checkResults;
       healthTracker = kept.healthTracker;
       result = kept.result;
-      nextOrder = kept.nextOrder;
+      orderAssigner.set(kept.nextOrder);
       localFileCount = kept.localFileCount;
       partial = kept.partial;
       pendingSave = kept.pendingSave;
@@ -294,7 +296,7 @@ public class MainActivity extends AppCompatActivity {
     state.checkResults.addAll(checkResults);
     state.healthTracker.fromJsonList(healthTracker.toJsonList());
     state.result = result;
-    state.nextOrder = nextOrder;
+    state.nextOrder = orderAssigner.peek();
     state.localFileCount = localFileCount;
     state.partial = partial;
     state.pendingSave = pendingSave;
@@ -445,12 +447,9 @@ public class MainActivity extends AppCompatActivity {
 
   private void updateModeDesc() { tvModeDesc.setText(mode.description()); }
 
-  /** 必须在 buckets 锁内调用：为记录分配互不冲突的全局顺序号（消除多线程 order 竞争）。 */
+  /** 为记录分配互不冲突的全局顺序号（委托给自带锁的 OrderAssigner，见其类注释）。 */
   private List<SourceRecord> reorder(List<SourceRecord> records) {
-    if (records == null || records.isEmpty()) return records;
-    List<SourceRecord> out = new ArrayList<>(records.size());
-    for (SourceRecord s : records) out.add(s.withOrder(nextOrder++));
-    return out;
+    return orderAssigner.assign(records);
   }
 
   private List<String> getUrls() {
@@ -683,7 +682,8 @@ public class MainActivity extends AppCompatActivity {
     fetchGen++;     // 使进行中的旧抓取回调全部失效
     recomputeGen++; // 使在途的去重任务失效：否则它会带着清空前的快照把旧结果写回来
     checkGen++;     // 使在途的校验回调失效
-    synchronized (buckets) { buckets.clearAll(); nextOrder = 0; }
+    synchronized (buckets) { buckets.clearAll(); }
+    orderAssigner.reset();
     synchronized (extraInvalid) { extraInvalid.clear(); }
     synchronized (discovered) { discovered.clear(); }
     localFileCount = 0; result = null; checkResults.clear(); partial = false;
