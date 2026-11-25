@@ -1,4 +1,4 @@
-# 📚 阅读书源去重
+﻿# 📚 阅读书源去重
 
 <p align="center">
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.0-blue.svg" alt="版本"></a>
@@ -43,10 +43,10 @@
 
 | 版本 | APK 大小 | 说明 |
 |------|----------|------|
-| 本社区版 v3.7.1 | **~2 MB** | R8 压缩，正式签名 |
+| 本社区版 v3.7.2 | **~2 MB** | R8 压缩，正式签名 |
 | 上游 v3.0.5 | ~6.8 MB | 未压缩 |
 
-当前版本：**v3.7.1**（versionCode 311）· 正式签名发布版
+当前版本：**v3.7.2**（versionCode 312）· 正式签名发布版
 
 ## 📝 更新日志
 

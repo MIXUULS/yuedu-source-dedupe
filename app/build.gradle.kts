@@ -1,4 +1,4 @@
-import java.util.Properties
+﻿import java.util.Properties
 
 plugins {
     id("com.android.application")
@@ -18,8 +18,8 @@ android {
         applicationId = "com.mina.yuedu"
         minSdk = 24
         targetSdk = 35
-        versionCode = 311
-        versionName = "3.7.1"
+        versionCode = 312
+        versionName = "3.7.2"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     signingConfigs {

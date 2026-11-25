@@ -1,4 +1,4 @@
-# 阅读书源去重 v3.7.1
+# 阅读书源去重 v3.7.2
 
 **仓库：** https://github.com/MIXUULS/yuedu-source-dedupe
 **上游：** Mina-kk/yuedu-source-dedupe（remote: upstream）
@@ -39,6 +39,8 @@
 - CheckTargetPreparer: 校验前清理编排（验证码源 → 登录源 → 规则完整度）
 - UrlInputParser: URL 输入切分/合并/序列化/剪贴板提取
 - OrderAssigner: 全局顺序号分配（自带锁，消除"必须在 buckets 锁内调用"的隐式约定）
+- RecheckPlanner: 重验范围规划（单条 / 批量 / URL 为 null 与已移除的兜底）
+- UrlPreflight: 解析前预检（去重 / 非 http 行 / 摘要文案）
 
 ## 测试基建
 - Robolectric 4.13（仅 testImplementation，不进 APK）
@@ -50,7 +52,7 @@
 ## 构建
 - Debug: `./gradlew assembleDebug`
 - Release: `./gradlew assembleRelease`
-- 测试: `./gradlew testDebugUnitTest`（250 项，31 个套件）
+- 测试: `./gradlew testDebugUnitTest`(280 项，34 个套件)
 - Lint: `./gradlew lintDebug`（当前 Error 0）
 - 装机: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - Release APK: `app/build/outputs/apk/release/app-release.apk`
@@ -69,11 +71,14 @@
 - **单元测试固定 UTF-8**：`testOptions { unitTests.all { systemProperty("file.encoding","UTF-8") } }` 已配好，
   涉及中文与 URL 编码的用例在默认 GBK 的机器上会误报，改动时不要删掉这段配置。
 
-**状态：** v3.7.1（versionCode 311）准备发布。
-2026-11-24 完成：两轮全量审查修复（30 类缺陷）+ 重构阶段 1&2。
-共 6 次提交：a6203c2 缺陷修复 → 9e02709 Robolectric 安全网 → 263c5f7 校验目标/URL 解析
-→ 9fa0ccf 导出范围/文件名 → 23ee2d0 OrderAssigner → 1474f8d 文档。
-测试 89 → 250 项（31 套件，0 失败），Lint Error 0，debug+release 通过。
+**状态：** v3.7.2（versionCode 312）准备发布。
+v3.7.1 已于 2026-11-24 发布（Release 页面含 APK，tag 已推送）。
+v3.7.2 相比 v3.7.1 新增：
+- 单条书源快速重验（校验明细每行带「重验」按钮）
+- 解析前 URL 预检（重复地址自动去重 + 提示非 http 行）
+- 修复健康记录无限增长（MAX_RECORDS=20000 + 90 天过期淘汰）
+
+测试 89 → 280 项（34 套件，0 失败），Lint Error 0，debug+release 通过。
 真机（PJD110/Android 17）验证：2257 条书源去重结果一致、
 深色模式重建后数据保留、清空后旧结果不复活、无崩溃。
-MainActivity 2958 → 2775 行，抽出 17 个可测类。
+MainActivity 2958 → 2809 行，抽出 19 个可测类。
