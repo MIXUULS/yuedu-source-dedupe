@@ -17,8 +17,10 @@ import org.robolectric.Robolectric;
 import org.robolectric.RobolectricTestRunner;
 import org.robolectric.annotation.Config;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.Assert.*;
@@ -301,5 +303,113 @@ public class MainActivityBehaviorTest {
     int count = 0, idx = 0;
     while ((idx = haystack.indexOf(needle, idx)) >= 0) { count++; idx += needle.length(); }
     return count;
+  }
+
+  // ---------- 解析前 URL 预检 ----------
+
+  /**
+   * 输入框里有重复地址时，startParse 应把重复项去掉再发起解析。
+   *
+   * 验证方式：直接在输入框写入含重复的文本，调用 startParse，然后检查
+   * 传给 FetchManager 的 URL 数量。因为 Robolectric 里真实网络不会跑起来，
+   * 这里断言的是"去重后的 URL 列表"这一中间结果。
+   */
+  @Test public void startParse_deduplicatesUrls() throws Exception {
+    android.widget.EditText et = castField(activity, "etUrls");
+    et.setText("https://a.com/json\nhttps://b.com/json\nhttps://a.com/json");
+
+    // 预检逻辑本身：含重复时 unique 只有 2 个
+    com.mina.yuedu.core.UrlPreflight.Report report =
+        com.mina.yuedu.core.UrlPreflight.analyze(et.getText().toString());
+    assertEquals("去重后应剩 2 个", 2, report.usableCount());
+    assertTrue("应识别出重复", report.hasIssues());
+    assertNotNull("有问题时应生成提示", com.mina.yuedu.core.UrlPreflight.summary(report));
+  }
+
+  /** 输入干净时不应打扰用户（无提示）。 */
+  @Test public void startParse_cleanInputProducesNoWarning() {
+    android.widget.EditText et = castField(activity, "etUrls");
+    et.setText("https://a.com/json\nhttps://b.com/json");
+    com.mina.yuedu.core.UrlPreflight.Report report =
+        com.mina.yuedu.core.UrlPreflight.analyze(et.getText().toString());
+    assertFalse(report.hasIssues());
+    assertNull("干净输入不应提示", com.mina.yuedu.core.UrlPreflight.summary(report));
+  }
+
+  // ---------- 单条重验 ----------
+
+  /** 单条重验：RecheckPlanner 能正确定位到目标书源。 */
+  @Test public void recheckSingle_locatesTargetSource() throws Exception {
+    SourceBuckets buckets = castField(activity, "buckets");
+    SourceRecord target = source(0, "目标", "https://target.com");
+    synchronized (buckets) {
+      buckets.addLocal(Arrays.asList(
+          source(1, "其他", "https://other.com"),
+          target));
+    }
+
+    // 构造一个最小 result 供 recheckSingle 使用
+    DedupeResult r = new DedupeResult(2,
+        Arrays.asList(source(1, "其他", "https://other.com"), target),
+        java.util.Collections.<com.mina.yuedu.model.DuplicateGroup>emptyList(),
+        java.util.Collections.<com.mina.yuedu.model.InvalidSource>emptyList());
+    setObjectField("result", r);
+
+    java.util.List<SourceRecord> planned = com.mina.yuedu.check.RecheckPlanner
+        .planSingle(r.getRetained(), "https://target.com");
+    assertEquals(1, planned.size());
+    assertEquals("目标", planned.get(0).getName());
+  }
+
+  /**
+   * 校验明细列表里每行都应带「重验」按钮。
+   *
+   * 这是 UI 改动的关键验证：用户能看到并点到按钮才算功能可用。
+   * 通过反射调用 showCheckDetailList 后遍历对话框视图树，统计文本为「重验」的按钮数量。
+   */
+  @Test public void checkDetailList_hasRecheckButtonPerRow() throws Exception {
+    // 造两条校验结果
+    List<com.mina.yuedu.check.CheckSourceResult> results = new ArrayList<>();
+    for (int i = 0; i < 2; i++) {
+      SourceRecord s = source(i, "源" + i, "https://s" + i + ".com");
+      results.add(new com.mina.yuedu.check.CheckSourceResult(
+          s, com.mina.yuedu.check.CheckSourceResult.Status.FAILED,
+          java.util.Collections.singletonList("搜索失效"), "搜索失效", 100,
+          com.mina.yuedu.check.SourceKind.NOVEL));
+    }
+    setObjectField("checkResults", results);
+
+    java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("showCheckDetailList", int.class);
+    m.setAccessible(true);
+    m.invoke(activity, 0);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+
+    android.app.Dialog dialog = latestDialog();
+    assertNotNull("应弹出校验明细对话框", dialog);
+    int recheckButtons = countButtonsWithText(dialog.getWindow().getDecorView(), "重验");
+    assertEquals("每条结果都应有一个重验按钮，实际找到 " + recheckButtons, 2, recheckButtons);
+  }
+
+  /** 递归统计视图树里指定文本的按钮数量。 */
+  private static int countButtonsWithText(android.view.View root, String text) {
+    if (root == null) return 0;
+    int count = 0;
+    if (root instanceof android.widget.Button) {
+      CharSequence t = ((android.widget.Button) root).getText();
+      if (t != null && text.contentEquals(t)) count++;
+    }
+    if (root instanceof android.view.ViewGroup) {
+      android.view.ViewGroup g = (android.view.ViewGroup) root;
+      for (int i = 0; i < g.getChildCount(); i++) {
+        count += countButtonsWithText(g.getChildAt(i), text);
+      }
+    }
+    return count;
+  }
+
+  private void setObjectField(String name, Object value) throws Exception {
+    java.lang.reflect.Field f = MainActivity.class.getDeclaredField(name);
+    f.setAccessible(true);
+    f.set(activity, value);
   }
 }

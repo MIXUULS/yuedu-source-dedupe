@@ -474,6 +474,12 @@ public class MainActivity extends AppCompatActivity {
     List<String> urls = getUrls();
     if (!ParseRequestDecision.shouldRun(buckets.localCount(), urls.size())) { toast("请选择本地文件或输入网络地址"); return; }
     if (urls.isEmpty()) { recompute(false); return; }
+    // 解析前预检：重复地址、非 http 行原本都是静默处理，用户只能从失败数猜问题
+    UrlPreflight.Report preflight = UrlPreflight.analyze(etUrls.getText() == null ? "" : etUrls.getText().toString());
+    String preflightMsg = UrlPreflight.summary(preflight);
+    if (preflightMsg != null) toast(preflightMsg);
+    // 用去重后的列表发起解析，避免同一个地址被重复请求（浪费流量与时间）
+    if (!preflight.unique.isEmpty()) urls = preflight.unique;
     rememberUrls(urls);
     final int gen = ++fetchGen; // 新一轮任务代际：旧任务的数据/收尾不再生效
     startFetch(urls, false, gen);
@@ -1210,6 +1216,8 @@ public class MainActivity extends AppCompatActivity {
     content.setOrientation(LinearLayout.VERTICAL);
     content.setPadding(dp(8), dp(8), dp(8), dp(8));
     final java.util.List<MaterialCheckBox> boxes = new ArrayList<>();
+    // 对话框在循环之后才创建，行内「重验」按钮需要在点击时才能拿到它
+    final androidx.appcompat.app.AlertDialog[] holder = new androidx.appcompat.app.AlertDialog[1];
     // 操作栏固定在弹窗顶部：勾选后导出/复制/移除选中项（无需滑到底部）
     TextView hint = new TextView(this);
     hint.setText("勾选书源后，用上方操作栏 导出 / 复制 / 移除选中项");
@@ -1262,7 +1270,34 @@ public class MainActivity extends AppCompatActivity {
       cb.setPadding(dp(4), dp(3), dp(4), dp(3));
       final int position = idx;
       cb.setOnCheckedChangeListener((b, on) -> { if (on) selected.add(position); else selected.remove(position); });
-      content.addView(cb);
+
+      // 每行右侧带一个「重验」按钮：之前只能全量重跑或重验全部失败源，
+      // 单独确认一条源是否恢复需要跑一遍全部，浪费时间和校验配额。
+      LinearLayout row = new LinearLayout(this);
+      row.setOrientation(LinearLayout.HORIZONTAL);
+      row.setGravity(android.view.Gravity.CENTER_VERTICAL);
+      LinearLayout.LayoutParams cbLp = new LinearLayout.LayoutParams(
+          0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+      row.addView(cb, cbLp);
+
+      MaterialButton btnRecheck = new MaterialButton(this, null,
+          com.google.android.material.R.attr.materialButtonOutlinedStyle);
+      btnRecheck.setText("重验");
+      btnRecheck.setTextSize(12);
+      btnRecheck.setMinWidth(0);
+      btnRecheck.setMinimumWidth(0);
+      btnRecheck.setPadding(dp(10), dp(2), dp(10), dp(2));
+      final CheckSourceResult rowResult = r;
+      btnRecheck.setOnClickListener(view -> {
+        if (checkRunning) { toast("校验进行中，请先停止"); return; }
+        // 对话框对象在循环之后才创建，这里通过 holding 数组延迟取用
+        if (holder[0] != null) holder[0].dismiss();
+        recheckSingle(rowResult.source);
+      });
+      row.addView(btnRecheck, new LinearLayout.LayoutParams(
+          LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT));
+
+      content.addView(row);
       boxes.add(cb);
     }
 
@@ -1318,7 +1353,7 @@ public class MainActivity extends AppCompatActivity {
     sv.setLayoutParams(new FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, maxH));
     String title = (filter == 1 ? "成功" : filter == 2 ? "失败" : filter == 3 ? "超时" : "全部")
         + " " + list.size() + " 条" + (list.size() > shown ? "（显示前 " + shown + " 条）" : "");
-    new MaterialAlertDialogBuilder(this)
+    holder[0] = new MaterialAlertDialogBuilder(this)
         .setTitle(title)
         .setView(sv)
         .setPositiveButton("关闭", null)
@@ -2805,13 +2840,20 @@ public class MainActivity extends AppCompatActivity {
 
   private void recheckUrls(List<String> urls, String label) {
     if (result == null || result.getRetained().isEmpty()) { toast("请先解析书源"); return; }
-    java.util.Set<String> badSet = new HashSet<>(urls);
-    List<SourceRecord> targets = new ArrayList<>();
-    for (SourceRecord s : result.getRetained()) {
-      if (s.getUrl() != null && badSet.contains(s.getUrl())) targets.add(s);
-    }
+    List<SourceRecord> targets = RecheckPlanner.plan(result.getRetained(), new HashSet<>(urls));
     if (targets.isEmpty()) { toast("这些失败源已不在当前结果中，无需重验"); return; }
-    toast("开始增量重验 " + targets.size() + " 条失败源…");
+    toast("开始" + label + " " + targets.size() + " 条书源…");
+    runCheck(checkSettings, targets);
+  }
+
+  /** 单条书源快速重验（明细列表里的「重验」按钮）。 */
+  private void recheckSingle(SourceRecord source) {
+    if (source == null || source.getUrl() == null) { toast("该书源没有地址，无法校验"); return; }
+    List<SourceRecord> targets = RecheckPlanner.planSingle(
+        result == null ? null : result.getRetained(), source.getUrl());
+    // 校验结果里的源可能已不在 retained（例如被用户手动移除），此时直接用传入对象
+    if (targets.isEmpty()) targets = new ArrayList<>(Collections.singletonList(source));
+    toast("正在重验「" + source.getName() + "」…");
     runCheck(checkSettings, targets);
   }
 
