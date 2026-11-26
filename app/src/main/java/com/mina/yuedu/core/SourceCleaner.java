@@ -14,12 +14,71 @@ public final class SourceCleaner {
 
   private SourceCleaner() {}
 
-  /** 检查书源是否「需要登录」（含 loginUrl 或 loginCheckUrl）。 */
+  /**
+   * 检查书源是否「需要登录」。
+   *
+   * Issue #1 用户反馈 + 真实样本统计（267 条书源里 68 条有非空 loginUrl）：
+   * loginUrl 在 legado 里不只是登录地址，还被用作请求前钩子——
+   * <pre>
+   *   "function login(){}"        空 JS 函数，根本不是登录页
+   *   "function register() {...}" 注册脚本
+   *   {"url": "null"}             JSON 配置钩子
+   *   {"url": ""}                 配置里 url 都是空的
+   * </pre>
+   * 这类值占非空 loginUrl 的约 24%（11 条 JS + 5 条 JSON 配置）。
+   * 真正指向登录页的 http 地址是 46 条，但其中也可能有"可登录但不登录也能用"的。
+   *
+   * 因此这里只排除**明显的非登录值**，指向真实 http 登录页的仍按原逻辑处理
+   * （是否剔除由用户通过开关决定，默认关闭）。
+   */
   public static boolean needsLogin(SourceRecord s) {
     if (s == null) return false;
     Map<String, Object> raw = s.getRaw();
-    return hasValue(raw, "loginUrl") || hasValue(raw, "loginCheckUrl");
+    // loginCheckUrl 是更明确的"登录检测"信号，优先看它
+    if (hasValue(raw, "loginCheckUrl")) return true;
+    return looksLikeRealLoginUrl(text(raw.get("loginUrl")));
   }
+
+  /**
+   * 判断 loginUrl 是否真的是一个登录地址。
+   *
+   * 排除真实样本里出现的几类"假登录"值，避免误剔主流书源。
+   */
+  static boolean looksLikeRealLoginUrl(String value) {
+    if (value == null) return false;
+    String t = value.trim();
+    if (t.isEmpty()) return false;
+
+    // 1. JS 代码：function login(){} / java.xxx / <js>...</js>
+    String lower = t.toLowerCase(java.util.Locale.ROOT);
+    if (lower.startsWith("function") || lower.startsWith("java.")
+        || lower.startsWith("<js>") || lower.contains("startbrowser")) {
+      return false;
+    }
+
+    // 2. JSON 配置对象：{"url": ...}
+    if (t.startsWith("{") || t.startsWith("[")) {
+      // 配置里 url 为空或 "null" 字符串，说明没有真实登录页
+      String inner = t.replaceAll("\\s+", "");
+      if (inner.contains("\"url\":\"\"") || inner.contains("\"url\":\"null\"")
+          || inner.equals("{}") || inner.equals("[]")) {
+        return false;
+      }
+      // 配置里有真实 http 地址，可能确实是登录入口
+      return inner.contains("http://") || inner.contains("https://");
+    }
+
+    // 3. 空函数体（已由上面 function 判断覆盖，这里兜底）
+    if (t.matches("function\\s*\\w*\\s*\\([^)]*\\)\\s*\\{\\s*\\}")) return false;
+
+    // 4. 只有空白/分隔符
+    if (t.replaceAll("[\\s;,]", "").isEmpty()) return false;
+
+    // 其余（http 地址、相对路径）视为可能是真登录入口
+    return true;
+  }
+
+  private static String text(Object o) { return o == null ? null : String.valueOf(o); }
 
   /** 检查书源是否「有弹窗验证码」（含 captchaUrl、verifyCode 或 authUrl）。 */
   public static boolean hasCaptcha(SourceRecord s) {
