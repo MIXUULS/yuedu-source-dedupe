@@ -12,7 +12,61 @@ public final class UrlNormalizer {
   public static String key(String raw, DedupeMode mode) throws URISyntaxException {
     if (mode == DedupeMode.AGGRESSIVE) return hostKey(raw);
     if (mode == DedupeMode.STANDARD) return standardKey(raw);
+    if (mode == DedupeMode.STRICT) return strictKey(raw);
     return completeKey(raw);
+  }
+
+  /**
+   * 严格模式的 key：在完整 URL 基础上，额外把 www / 手机站归一化到裸域。
+   *
+   * Issue #1 三.3 的建议：很多书源同时存在 {@code www.site.com}、{@code m.site.com}
+   * 和 {@code site.com} 三个版本，内容完全一样，只是入口不同。
+   *
+   * 只在严格模式启用——标准模式保持"不同主机就是不同源"的保守语义，
+   * 避免把确实内容不同的站（如 PC 版与移动版布局差异很大）误合并。
+   */
+  public static String strictKey(String raw) throws URISyntaxException {
+    String[] parts = splitIdentity(raw);
+    URI u = new URI(parts[0]);
+    validate(raw, u);
+    String scheme = u.getScheme().toLowerCase(Locale.ROOT);
+    String host = normalizeMobileHost(hostOf(raw, u).toLowerCase(Locale.ROOT));
+    int port = u.getPort();
+    boolean def = (scheme.equals("http") && port == 80) || (scheme.equals("https") && port == 443);
+    String hp = host + (port >= 0 && !def ? ":" + port : "");
+    String path = u.getRawPath();
+    if (path == null || path.isEmpty()) path = "/";
+    if (path.length() > 1 && path.endsWith("/")) path = path.substring(0, path.length() - 1);
+    String q = u.getRawQuery();
+    String key = scheme + "://" + hp + path + (q == null || q.isEmpty() ? "" : "?" + q);
+    if (parts[1] != null && !parts[1].isEmpty()) key += "#" + parts[1];
+    return key;
+  }
+
+  /** 常见子域前缀：去掉后视为同一个站。 */
+  private static final String[] MOBILE_PREFIXES = {"www.", "m.", "wap.", "mobile."};
+
+  /**
+   * 把 www / 手机站前缀归一化掉。
+   *
+   * 只在有裸域对照时才剥——例如 {@code www.a.com} 剥成 {@code a.com}，
+   * 但 {@code www.com} 这种本身是裸域的不动（剥完剩 "com" 会撞车）。
+   */
+  static String normalizeMobileHost(String host) {
+    if (host == null || host.isEmpty()) return host;
+    // IPv4 / IPv6 不处理
+    if (host.matches("[0-9.]+") || host.contains(":")) return host;
+
+    for (String prefix : MOBILE_PREFIXES) {
+      if (!host.startsWith(prefix)) continue;
+      String rest = host.substring(prefix.length());
+      // 剥完必须还剩至少两段（如 a.com），否则说明原 host 本身就很短，不动
+      if (rest.indexOf('.') <= 0) return host;
+      // 剥完不能只剩顶级域
+      if (rest.lastIndexOf('.') == rest.length() - 1) return host;
+      return rest;
+    }
+    return host;
   }
 
   /**
