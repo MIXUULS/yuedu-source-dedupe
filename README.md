@@ -1,7 +1,7 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.2-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.3-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
   <a><img src="https://img.shields.io/badge/Android-7.0%2B-34A853.svg" alt="Android"></a>
@@ -44,12 +44,35 @@
 
 | 版本 | APK 大小 | 说明 |
 |------|----------|------|
-| 本社区版 v3.7.2 | **~2 MB** | R8 压缩，正式签名 |
+| 本社区版 v3.7.3 | **~2 MB** | R8 压缩，正式签名 |
 | 上游 v3.0.5 | ~6.8 MB | 未压缩 |
 
-当前版本：**v3.7.2**（versionCode 312）· 正式签名发布版
+当前版本：**v3.7.3**（versionCode 313）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.7.3（2026-11-26 修复 Issue #1 反馈）
+
+**修复**
+
+- **`bookSourceUrl` 为空的书源不再被丢弃**：改为从 `searchUrl` → `ruleSearch.baseUrl`
+  → `ruleExplore.baseUrl` → `exploreUrl` 首行按优先级恢复主机地址，
+  恢复后写回记录，导出不会再是空地址
+- **严格模式下 www / 手机站归一化**：`www.` / `m.` / `wap.` / `mobile.` 前缀归一化到裸域，
+  `www.site.com`、`m.site.com`、`site.com` 视为同一书源。仅严格模式生效
+- **失败原因以逗号开头时的显示异常**：旧代码用 `idx > 0` 判断逗号位置，
+  以逗号开头的消息不会被截断，界面直接显示前导逗号
+
+**内部重构**
+
+- 抽出 `MainState`：收敛 8 个并发状态字段，`invalidateAll()` 成为
+  「三条链路一起作废」的唯一实现点
+- 抽出 `FetchResponseClassifier`（网络响应归类）、`CheckStats`（校验统计）
+- 清理 10 个未使用资源
+
+**测试**
+
+- 280 → 359 项（40 个套件），新增跨模块一致性测试
 
 ### v3.7.2（2026-11-25 单条重验 + 解析前预检）
 
