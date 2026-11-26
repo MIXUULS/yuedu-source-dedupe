@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!-- Material3 深色配色 -->
     <color name="md_theme_primary">#83CDD6</color>
@@ -16,12 +16,4 @@
     <color name="ledger_rule">#3D4C4F</color>
     <color name="ledger_ink">#DEE9EA</color>
     <color name="ledger_muted">#AABABD</color>
-    <color name="stat_ok_ink">#81C995</color>
-    <color name="stat_fail_ink">#F2B8B5</color>
-    <color name="stat_timeout_ink">#E8B95A</color>
-    <color name="kind_novel_ink">#83CDD6</color>
-    <color name="kind_comic_ink">#83CDD6</color>
-    <color name="kind_video_ink">#83CDD6</color>
-    <color name="kind_audio_ink">#83CDD6</color>
-    <color name="kind_file_ink">#83CDD6</color>
 </resources>

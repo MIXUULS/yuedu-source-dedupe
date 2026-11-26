@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="md_theme_primary">#236B78</color>
     <color name="md_theme_on_primary">#FFFFFF</color>
@@ -15,12 +15,4 @@
     <color name="ledger_rule">#D6E3E4</color>
     <color name="ledger_ink">#172124</color>
     <color name="ledger_muted">#68777A</color>
-    <color name="stat_ok_ink">#2E7D32</color>
-    <color name="stat_fail_ink">#B3261E</color>
-    <color name="stat_timeout_ink">#9A6918</color>
-    <color name="kind_novel_ink">#236B78</color>
-    <color name="kind_comic_ink">#236B78</color>
-    <color name="kind_video_ink">#236B78</color>
-    <color name="kind_audio_ink">#236B78</color>
-    <color name="kind_file_ink">#236B78</color>
 </resources>

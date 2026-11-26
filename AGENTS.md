@@ -1,4 +1,4 @@
-# 阅读书源去重 v3.7.2
+# 阅读书源去重 v3.7.3
 
 **仓库：** https://github.com/MIXUULS/yuedu-source-dedupe
 **上游：** Mina-kk/yuedu-source-dedupe（remote: upstream）
@@ -41,6 +41,10 @@
 - OrderAssigner: 全局顺序号分配（自带锁，消除"必须在 buckets 锁内调用"的隐式约定）
 - RecheckPlanner: 重验范围规划（单条 / 批量 / URL 为 null 与已移除的兜底）
 - UrlPreflight: 解析前预检（去重 / 非 http 行 / 摘要文案）
+- FetchResponseClassifier: 网络响应归类（书源数组 / 间接地址 / JSON 地址 / 无效）
+- MainState: 并发状态与任务代际（invalidateAll 是"三条链路一起作废"的唯一实现点）
+- UrlRecovery: bookSourceUrl 为空时从 searchUrl / 规则 baseUrl / exploreUrl 恢复
+- CheckStats: 校验统计 + 失败原因归一化
 
 ## 测试基建
 - Robolectric 4.13（仅 testImplementation，不进 APK）
@@ -52,7 +56,7 @@
 ## 构建
 - Debug: `./gradlew assembleDebug`
 - Release: `./gradlew assembleRelease`
-- 测试: `./gradlew testDebugUnitTest`(280 项，34 个套件)
+- 测试: `./gradlew testDebugUnitTest`(359 项，40 个套件)
 - Lint: `./gradlew lintDebug`（当前 Error 0）
 - 装机: `adb install -r app/build/outputs/apk/debug/app-debug.apk`
 - Release APK: `app/build/outputs/apk/release/app-release.apk`
@@ -71,14 +75,22 @@
 - **单元测试固定 UTF-8**：`testOptions { unitTests.all { systemProperty("file.encoding","UTF-8") } }` 已配好，
   涉及中文与 URL 编码的用例在默认 GBK 的机器上会误报，改动时不要删掉这段配置。
 
-**状态：** v3.7.2（versionCode 312）准备发布。
-v3.7.1 已于 2026-11-24 发布（Release 页面含 APK，tag 已推送）。
-v3.7.2 相比 v3.7.1 新增：
-- 单条书源快速重验（校验明细每行带「重验」按钮）
-- 解析前 URL 预检（重复地址自动去重 + 提示非 http 行）
-- 修复健康记录无限增长（MAX_RECORDS=20000 + 90 天过期淘汰）
+**状态：** v3.7.3（versionCode 313）代码已完成，待发版。
+v3.7.0 / v3.7.1 / v3.7.2 均已发布为正式 Release（含 APK）。
 
-测试 89 → 280 项（34 套件，0 失败），Lint Error 0，debug+release 通过。
-真机（PJD110/Android 17）验证：2257 条书源去重结果一致、
-深色模式重建后数据保留、清空后旧结果不复活、无崩溃。
-MainActivity 2958 → 2809 行，抽出 19 个可测类。
+v3.7.3 相比 v3.7.2：
+- 修复 Issue #1 一.2：bookSourceUrl 为空时从 searchUrl / 规则 baseUrl 恢复
+- 修复 Issue #1 三.3：严格模式下 www / 手机站归一化到裸域
+- 修复失败原因以逗号开头时的展示异常（旧代码 idx > 0 判断漏洞）
+- 重构：抽出 MainState（并发状态与代际）、FetchResponseClassifier、CheckStats
+- 清理 10 个未使用资源（含同步删除 values-night 对应定义）
+
+测试 280 → 359 项（40 套件，0 失败），Lint Error 0，debug+release 通过。
+真机（PJD110/Android 17）启动正常、无崩溃。
+
+已知验证空白：
+- 真机 UI 自动化点击不可靠，「点解析 → 网络抓取 → 结果展示」全链路未端到端验证，
+  替代方案是 Robolectric 全流程测试。
+- 空壳书源判定已实现但**未接入**（缺真实样本定阈值），规则保留在代码注释里。
+
+MainActivity 2809 → 2782 行，共抽出 23 个可测类。

@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">阅读书源去重</string>
     <string name="tab_dedupe">去重</string>
@@ -7,7 +7,6 @@
     <string name="parse_network">解析网络源</string>
     <string name="check_source">校验源是否可用</string>
     <string name="check_source_config">校验书源配置</string>
-    <string name="check_source_timeout">校验超时(秒)</string>
     <string name="check_source_keyword">搜索书名、作者</string>
     <string name="check_source_keyword_default">我的</string>
     <string name="check_source_kinds">校验类型</string>
@@ -28,7 +27,6 @@
     <string name="save_json">保存 JSON</string>
     <string name="clear_all">清空</string>
     <string name="only_usable">仅导出可用源</string>
-    <string name="clean_login">清理需要登录的源</string>
     <string name="ok">确定</string>
     <string name="cancel">取消</string>
 </resources>
