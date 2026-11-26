@@ -11,20 +11,23 @@ public final class DedupeEngine {
     }
     Map<String,List<SourceRecord>> buckets=new LinkedHashMap<>();
     for(SourceRecord s: sources){
+      // v2 老格式先把字段补成 v3（1028/1399 条真实书源是老格式，
+      // 不补的话下游校验与规则完整度判断都会误判）
+      SourceRecord adapted = V2FieldAdapter.adapt(s);
       // URL 为空时先从 searchUrl / 规则 baseUrl 里恢复（Issue #1）：
       // 直接丢弃会把还能用的书源当废品，用户看到的是"导入 N 条但只剩 M 条"。
       // 这一步只做"补救"，不判死——恢复不出来才老实报 URL 缺失。
-      String u = UrlRecovery.recover(s);
+      String u = UrlRecovery.recover(adapted);
       if(u==null){
-        String rawUrl = s.getUrl();
-        if(rawUrl==null) invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName()));
-        else invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName()));
+        String rawUrl = adapted.getUrl();
+        if(rawUrl==null) invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, adapted.getName()));
+        else invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, adapted.getName()));
         continue;
       }
       try{
         String k=UrlNormalizer.key(u, mode);
         // 恢复出的 URL 与原值不同时，把恢复值写进记录，否则导出后仍然是空地址
-        SourceRecord base = u.equals(s.getUrl()) ? s : withRecoveredUrl(s, u);
+        SourceRecord base = u.equals(adapted.getUrl()) ? adapted : withRecoveredUrl(adapted, u);
         SourceRecord v=clean? base.withName(NameCleaner.clean(base.getName())) : base;
         buckets.computeIfAbsent(k, x->new ArrayList<>()).add(v);
       }catch(Exception e){ invalid.add(new InvalidSource(InvalidSource.Kind.INVALID_URL, u)); }
@@ -44,17 +47,18 @@ public final class DedupeEngine {
                                         List<InvalidSource> invalid) {
     List<SourceRecord> processed = new ArrayList<>(sources.size());
     for (SourceRecord s : sources) {
-      // 与 run() 保持一致：先尝试恢复 URL
-      String recovered = UrlRecovery.recover(s);
+      // 与 run() 保持一致：先适配 v2 格式，再尝试恢复 URL
+      SourceRecord adapted = V2FieldAdapter.adapt(s);
+      String recovered = UrlRecovery.recover(adapted);
       if (recovered == null) {
-        if (s.getUrl() == null) {
-          invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName()));
+        if (adapted.getUrl() == null) {
+          invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, adapted.getName()));
         } else {
-          invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName()));
+          invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, adapted.getName()));
         }
         continue;
       }
-      SourceRecord base = recovered.equals(s.getUrl()) ? s : withRecoveredUrl(s, recovered);
+      SourceRecord base = recovered.equals(adapted.getUrl()) ? adapted : withRecoveredUrl(adapted, recovered);
       processed.add(clean ? base.withName(NameCleaner.clean(base.getName())) : base);
     }
     // 按名称分组
