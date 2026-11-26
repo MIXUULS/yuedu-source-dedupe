@@ -11,31 +11,51 @@ public final class DedupeEngine {
     }
     Map<String,List<SourceRecord>> buckets=new LinkedHashMap<>();
     for(SourceRecord s: sources){
-      String u=s.getUrl();
-      if(u==null){ invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName())); continue; }
-      if(u.trim().isEmpty()){ invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName())); continue; }
+      // URL 为空时先从 searchUrl / 规则 baseUrl 里恢复（Issue #1）：
+      // 直接丢弃会把还能用的书源当废品，用户看到的是"导入 N 条但只剩 M 条"。
+      // 这一步只做"补救"，不判死——恢复不出来才老实报 URL 缺失。
+      String u = UrlRecovery.recover(s);
+      if(u==null){
+        String rawUrl = s.getUrl();
+        if(rawUrl==null) invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName()));
+        else invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName()));
+        continue;
+      }
       try{
         String k=UrlNormalizer.key(u, mode);
-        SourceRecord v=clean? s.withName(NameCleaner.clean(s.getName())) : s;
+        // 恢复出的 URL 与原值不同时，把恢复值写进记录，否则导出后仍然是空地址
+        SourceRecord base = u.equals(s.getUrl()) ? s : withRecoveredUrl(s, u);
+        SourceRecord v=clean? base.withName(NameCleaner.clean(base.getName())) : base;
         buckets.computeIfAbsent(k, x->new ArrayList<>()).add(v);
       }catch(Exception e){ invalid.add(new InvalidSource(InvalidSource.Kind.INVALID_URL, u)); }
     }
     return buildResult(sources.size(), buckets, mode, clean, invalid);
   }
 
+  /** 把恢复出的 URL 写进记录（同时更新 raw 里的 bookSourceUrl，保证导出正确）。 */
+  private static SourceRecord withRecoveredUrl(SourceRecord s, String url){
+    Map<String,Object> raw = new LinkedHashMap<>(s.getRaw());
+    raw.put("bookSourceUrl", url);
+    return new SourceRecord(s.getOrder(), s.getName(), url, raw);
+  }
+
   /** 按名称相似度去重。 */
-  private static DedupeResult runByName(List<SourceRecord> sources, boolean clean, List<InvalidSource> invalid) {
+  private static DedupeResult runByName(List<SourceRecord> sources, boolean clean,
+                                        List<InvalidSource> invalid) {
     List<SourceRecord> processed = new ArrayList<>(sources.size());
     for (SourceRecord s : sources) {
-      if (s.getUrl() == null) {
-        invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName()));
+      // 与 run() 保持一致：先尝试恢复 URL
+      String recovered = UrlRecovery.recover(s);
+      if (recovered == null) {
+        if (s.getUrl() == null) {
+          invalid.add(new InvalidSource(InvalidSource.Kind.MISSING_URL, s.getName()));
+        } else {
+          invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName()));
+        }
         continue;
       }
-      if (s.getUrl().trim().isEmpty()) {
-        invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, s.getName()));
-        continue;
-      }
-      processed.add(clean ? s.withName(NameCleaner.clean(s.getName())) : s);
+      SourceRecord base = recovered.equals(s.getUrl()) ? s : withRecoveredUrl(s, recovered);
+      processed.add(clean ? base.withName(NameCleaner.clean(base.getName())) : base);
     }
     // 按名称分组
     List<List<SourceRecord>> nameGroups = NameSimilarity.groupByName(processed);
