@@ -176,6 +176,23 @@
                     android:layout_height="wrap_content"
                     android:text="清理名称中的装饰符号" />
 
+                <!--
+                  过滤开关放在主界面：这两个选项会直接减少去重后的书源数量，
+                  藏在「校验设置」里会让用户以为它们只影响校验，看不到书源已经少了。
+                  默认关闭——有没有 loginUrl / captchaUrl 不足以判定书源不可用。
+                -->
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchCleanLogin"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="剔除含登录入口的源" />
+
+                <com.google.android.material.materialswitch.MaterialSwitch
+                    android:id="@+id/switchDeleteCaptcha"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:text="剔除含验证码配置的源" />
+
                 <com.google.android.material.button.MaterialButton
                     android:id="@+id/btnParse"
                     android:layout_width="match_parent"

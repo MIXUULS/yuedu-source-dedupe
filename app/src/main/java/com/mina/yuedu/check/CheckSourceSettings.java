@@ -25,9 +25,9 @@ public final class CheckSourceSettings {
   /** 快速模式：只跑搜索+详情两步，跳过发现/目录/正文。 */
   public boolean quickMode = false;
   /** 删除弹窗验证码的源（默认开）。 */
-  public boolean deleteCaptcha = true;
+  public boolean deleteCaptcha = false;
   /** 清理需要登录的源（默认开）。 */
-  public boolean cleanLogin = true;
+  public boolean cleanLogin = false;
 
   public void resetToDefaults() {
     timeoutSeconds = DEFAULT_TIMEOUT;
@@ -45,8 +45,8 @@ public final class CheckSourceSettings {
     checkFile = true;
     okStatusRanges = DEFAULT_OK_STATUS;
     quickMode = false;
-    deleteCaptcha = true;
-    cleanLogin = true;
+    deleteCaptcha = false;
+    cleanLogin = false;
   }
 
   public void normalize() {

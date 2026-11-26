@@ -139,19 +139,11 @@
             android:textSize="15sp"
             android:textStyle="bold" />
 
-        <com.google.android.material.checkbox.MaterialCheckBox
-            android:id="@+id/cbCleanLogin"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:checked="true"
-            android:text="清理需要登录的源" />
-
-        <com.google.android.material.checkbox.MaterialCheckBox
-            android:id="@+id/cbDeleteCaptcha"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:checked="true"
-            android:text="删除弹窗验证码的源" />
+        <!--
+          这两个过滤开关已移到主界面过滤区。
+          原因：它们会在去重阶段直接减少书源数量，放在校验设置里会让用户
+          以为只影响校验，看不到书源已经被删掉了。
+        -->
 
         <com.google.android.material.textfield.TextInputLayout
             android:id="@+id/tilCheckKeyword"

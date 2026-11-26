@@ -64,7 +64,7 @@ public class MainActivity extends AppCompatActivity {
   private TextView tvExportPreview;
   private final Map<SourceKind, KindRow> kindRows = new EnumMap<>(SourceKind.class);
   private LinearProgressIndicator progressBar;
-  private MaterialSwitch switchCleanNames, switchOnlyUsable;
+  private MaterialSwitch switchCleanNames, switchOnlyUsable, switchCleanLogin, switchDeleteCaptcha;
   private MaterialButtonToggleGroup modeGroup;
   private Slider sliderConcurrency;
   private MaterialButton btnParse, btnStop, btnCheck, btnImport, btnSave;
@@ -400,6 +400,8 @@ public class MainActivity extends AppCompatActivity {
     progressBar = root.findViewById(R.id.progressBar);
     switchCleanNames = root.findViewById(R.id.switchCleanNames);
     switchOnlyUsable = root.findViewById(R.id.switchOnlyUsable);
+    switchCleanLogin = root.findViewById(R.id.switchCleanLogin);
+    switchDeleteCaptcha = root.findViewById(R.id.switchDeleteCaptcha);
     modeGroup = root.findViewById(R.id.modeGroup);
     sliderConcurrency = root.findViewById(R.id.sliderConcurrency);
     btnParse = root.findViewById(R.id.btnParse);
@@ -440,6 +442,14 @@ public class MainActivity extends AppCompatActivity {
     sliderConcurrency.addOnChangeListener((s, value, fromUser) -> concurrency = Math.round(value));
     switchCleanNames.setOnCheckedChangeListener((b, on) -> { cleanNames = on; savePrefs(); if (result != null) recompute(partial); });
     switchOnlyUsable.setOnCheckedChangeListener((b, on) -> { onlyUsable = on; savePrefs(); refreshExportPreview(); });
+    switchCleanLogin.setOnCheckedChangeListener((b, on) -> {
+      checkSettings.cleanLogin = on; saveCheckSettings();
+      if (result != null) recompute(partial);
+    });
+    switchDeleteCaptcha.setOnCheckedChangeListener((b, on) -> {
+      checkSettings.deleteCaptcha = on; saveCheckSettings();
+      if (result != null) recompute(partial);
+    });
     btnParse.setOnClickListener(v -> startParse());
     btnStop.setOnClickListener(v -> stopCurrentTask());
     btnCheck.setOnClickListener(v -> showCheckDialog());
@@ -675,6 +685,8 @@ public class MainActivity extends AppCompatActivity {
     if (!running) btnStop.setText("停止");
     for (int i = 0; i < modeGroup.getChildCount(); i++) modeGroup.getChildAt(i).setEnabled(!running);
     switchCleanNames.setEnabled(!running);
+    if (switchCleanLogin != null) switchCleanLogin.setEnabled(!running);
+    if (switchDeleteCaptcha != null) switchDeleteCaptcha.setEnabled(!running);
     sliderConcurrency.setEnabled(!running);
     for (KindRow row : kindRows.values()) {
       if (row.sw != null) row.sw.setEnabled(!running);
@@ -793,6 +805,8 @@ public class MainActivity extends AppCompatActivity {
     if (modeGroup != null) modeGroup.check(checkId);
     if (switchCleanNames != null) switchCleanNames.setChecked(p.getBoolean("clean", false));
     if (switchOnlyUsable != null) switchOnlyUsable.setChecked(p.getBoolean("onlyUsable", false));
+    if (switchCleanLogin != null) switchCleanLogin.setChecked(checkSettings.cleanLogin);
+    if (switchDeleteCaptcha != null) switchDeleteCaptcha.setChecked(checkSettings.deleteCaptcha);
     if (sliderConcurrency != null) {
       sliderConcurrency.setValue(Math.max(1f, Math.min(5f, (float) p.getInt("concurrency", 4))));
     }
@@ -849,8 +863,11 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.keyword = p.getString("keyword", CheckSourceSettings.DEFAULT_KEYWORD);
     checkSettings.okStatusRanges = p.getString("okStatus", CheckSourceSettings.DEFAULT_OK_STATUS);
     checkSettings.quickMode = p.getBoolean("quickMode", false);
-    checkSettings.deleteCaptcha = p.getBoolean("deleteCaptcha", true);
-    checkSettings.cleanLogin = p.getBoolean("cleanLogin", true);
+    // 过滤开关默认关闭。v3.7.4 之前默认是 true，老用户升级后 prefs 里已存着 true，
+    // 光改默认值不够——必须做一次性迁移，否则他们会继续被剔掉书源。
+    checkSettings.deleteCaptcha = p.getBoolean("deleteCaptcha", false);
+    checkSettings.cleanLogin = p.getBoolean("cleanLogin", false);
+    migrateFilterDefaultsOnce(p);
     checkSettings.checkSearch = p.getBoolean("search", true);
     checkSettings.checkDiscovery = p.getBoolean("discovery", true);
     checkSettings.checkInfo = p.getBoolean("info", true);
@@ -862,6 +879,30 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.checkAudio = p.getBoolean("kindAudio", true);
     checkSettings.checkFile = p.getBoolean("kindFile", true);
     checkSettings.normalize();
+  }
+
+  /**
+   * 一次性迁移：把旧版本默认开启的过滤开关重置为关闭。
+   *
+   * 背景（Issue #1）：v3.7.3 及之前，`deleteCaptcha` / `cleanLogin` 默认是 true，
+   * 用户什么都没做就会在去重阶段丢掉所有带 loginUrl / captchaUrl 的书源。
+   * 改成默认 false 后，老用户的 prefs 里仍存着 true，不迁移的话他们升级后
+   * 行为不变，等于修复没生效。
+   *
+   * 用独立的迁移标记而不是比对值——用户如果真的是自己勾选的，我们无权改；
+   * 但无法区分"自己勾的"和"旧默认值"，所以只在首次升级时重置一次，
+   * 之后用户再勾选就会被尊重。
+   */
+  private void migrateFilterDefaultsOnce(SharedPreferences p) {
+    final String key = "filterDefaultsMigrated_v374";
+    if (p.getBoolean(key, false)) return;
+    p.edit()
+        .putBoolean("deleteCaptcha", false)
+        .putBoolean("cleanLogin", false)
+        .putBoolean(key, true)
+        .apply();
+    checkSettings.deleteCaptcha = false;
+    checkSettings.cleanLogin = false;
   }
 
   private void saveCheckSettings() {
@@ -928,10 +969,6 @@ public class MainActivity extends AppCompatActivity {
     cbContent.setEnabled(cbInfo.isChecked() && cbCategory.isChecked());
     MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
     if (cbQuickMode != null) cbQuickMode.setChecked(checkSettings.quickMode);
-    MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
-    if (cbDeleteCaptcha != null) cbDeleteCaptcha.setChecked(checkSettings.deleteCaptcha);
-    MaterialCheckBox cbCleanLogin = v.findViewById(R.id.cbCleanLogin);
-    if (cbCleanLogin != null) cbCleanLogin.setChecked(checkSettings.cleanLogin);
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) etOkStatus.setText(checkSettings.okStatusRanges);
   }
@@ -961,10 +998,6 @@ public class MainActivity extends AppCompatActivity {
     checkSettings.checkFile = ((MaterialCheckBox) v.findViewById(R.id.cbKindFile)).isChecked();
     MaterialCheckBox cbQuickMode = v.findViewById(R.id.cbQuickMode);
     if (cbQuickMode != null) checkSettings.quickMode = cbQuickMode.isChecked();
-    MaterialCheckBox cbDeleteCaptcha = v.findViewById(R.id.cbDeleteCaptcha);
-    if (cbDeleteCaptcha != null) checkSettings.deleteCaptcha = cbDeleteCaptcha.isChecked();
-    MaterialCheckBox cbCleanLogin = v.findViewById(R.id.cbCleanLogin);
-    if (cbCleanLogin != null) checkSettings.cleanLogin = cbCleanLogin.isChecked();
     TextInputEditText etOkStatus = v.findViewById(R.id.etOkStatus);
     if (etOkStatus != null) {
       checkSettings.okStatusRanges = etOkStatus.getText() == null ? "" : etOkStatus.getText().toString().trim();

@@ -108,13 +108,22 @@ public class CheckSourceSettingsTest {
   @Test public void resetToDefaultsRestoresQuickAndFilterOptions() {
     CheckSourceSettings settings = new CheckSourceSettings();
     settings.quickMode = true;
-    settings.deleteCaptcha = false;
-    settings.cleanLogin = false;
+    settings.deleteCaptcha = true;
+    settings.cleanLogin = true;
 
     settings.resetToDefaults();
 
     assertFalse(settings.quickMode);
-    assertTrue(settings.deleteCaptcha);
-    assertTrue(settings.cleanLogin);
+    // 过滤选项默认关闭：有没有 loginUrl / captchaUrl 不足以判定书源不可用
+    // （Issue #1 用户反馈：这些字段在 legado 里还用于切换 URL 等高级功能）
+    assertFalse("默认不应剔除含登录入口的源", settings.deleteCaptcha);
+    assertFalse("默认不应剔除含验证码配置的源", settings.cleanLogin);
+  }
+
+  /** 默认值本身必须是关闭的，避免用户什么都没做就丢书源。 */
+  @Test public void filtersDefaultOff() {
+    CheckSourceSettings settings = new CheckSourceSettings();
+    assertFalse("新建设置的 deleteCaptcha 应默认关闭", settings.deleteCaptcha);
+    assertFalse("新建设置的 cleanLogin 应默认关闭", settings.cleanLogin);
   }
 }
