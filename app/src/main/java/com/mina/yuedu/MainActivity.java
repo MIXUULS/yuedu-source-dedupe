@@ -1089,24 +1089,11 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void renderCheckStats() {
-    int ok = 0, fail = 0, timeout = 0;
-    Map<String, Integer> reasonCount = new LinkedHashMap<>();
-    for (CheckSourceResult r : checkResults) {
-      if (r.status == CheckSourceResult.Status.SKIPPED) continue;
-      if (r.status == CheckSourceResult.Status.SUCCESS) ok++;
-      else if (r.status == CheckSourceResult.Status.TIMEOUT) timeout++;
-      else {
-        fail++;
-        String reason = r.message;
-        if (reason == null || reason.trim().isEmpty()) reason = "未知原因";
-        reason = reason.trim();
-        int idx = reason.indexOf('，');
-        if (idx < 0) idx = reason.indexOf(',');
-        if (idx > 0) reason = reason.substring(0, idx);
-        if (reason.length() > 14) reason = reason.substring(0, 14) + "…";
-        reasonCount.put(reason, reasonCount.getOrDefault(reason, 0) + 1);
-      }
-    }
+    // 统计与原因归一化抽到 CheckStats（可单测）
+    CheckStats stats = CheckStats.summarize(checkResults);
+    int ok = stats.ok, fail = stats.fail, timeout = stats.timeout;
+    Map<String, Integer> reasonCount = stats.reasonCount;
+
     tvCheckStats.setVisibility(View.VISIBLE);
     tvCheckStats.setText(getString(R.string.check_result_title));
     if (rowCheckTiles != null) rowCheckTiles.setVisibility(View.VISIBLE);
