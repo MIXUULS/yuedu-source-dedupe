@@ -222,13 +222,28 @@ public final class CheckSourceEngine {
     Map<String, String> headers = HttpProbe.parseSourceHeader(source.rawString("header"));
     int stepTimeout = (int) Math.min(Math.max(settings.timeoutMillis() / 3L, 8000L), 30000L);
 
-    // base host probe
+    // base host probe：只判「站点是否活着」，不判「路径是否可用」。
+    // 原实现把 403/404/5xx 都算「网站失效」，实测 1443 个真实域名里
+    // 有 173 个返回 4xx/5xx（403 占 106），这些站完全能用，只是拒绝了这个请求。
+    // 只有 DNS 失败 / 连接被拒才记「网站失效」，其余记成「站点在线但…」供用户判断。
     try {
       AnalyzeUrlLite baseReq = AnalyzeUrlLite.parse(base, base, settings.keyword, 1);
       HttpProbe.Response br = HttpProbe.fetch(baseReq, headers, Math.min(stepTimeout, 10000));
-      if (!settings.isHttpOk(br.code)) bad.add("网站失效");
+      SiteLiveness.Verdict live = SiteLiveness.fromStatusCode(br.code);
+      if (live == SiteLiveness.Verdict.DEAD) {
+        bad.add("网站失效");
+      } else if (!settings.isHttpOk(br.code)) {
+        // 站点活着但这次请求不被接受：记录具体原因，不当成死站
+        bad.add(SiteLiveness.describe(br.code));
+      }
     } catch (Exception e) {
-      bad.add("网站失效");
+      SiteLiveness.Verdict live = SiteLiveness.fromException(e);
+      if (live == SiteLiveness.Verdict.DEAD) {
+        bad.add("网站失效");
+      } else {
+        // 超时/连接重置/SSL 等无法确定的情况：站点多半还活着，不判死
+        bad.add("站点在线但连接异常");
+      }
     }
     if (Thread.currentThread().isInterrupted()) return bad;
 

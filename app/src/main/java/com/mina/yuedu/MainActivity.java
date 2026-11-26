@@ -1951,12 +1951,18 @@ public class MainActivity extends AppCompatActivity {
     PopupMenu pm = new PopupMenu(this, btnExport);
     pm.getMenu().add(0, 1, 0, "导出可用书源");
     pm.getMenu().add(0, 2, 1, "导出不可用书源");
-    pm.getMenu().add(0, 3, 2, "导出非HTTP书源");
-    pm.getMenu().add(0, 4, 3, "导出 CSV（可在电脑打开）");
-    pm.getMenu().add(0, 5, 4, "合并同域校验结果");
-    pm.getMenu().add(0, 6, 5, "导出优质源（评分≥70）");
-    pm.getMenu().add(0, 7, 6, "同域优化建议");
-    pm.getMenu().add(0, 8, 7, "智能优选导出（评分≥70，每域最多2个）");
+    // 新增：区分「站点已死」与「站点在线但规则失效」。
+    // 用户要的是「去除无论如何都不能用的网站」——403/404/超时都不算，
+    // 只有 DNS 失败与连接被拒才是换什么手段都救不回来的。
+    UsabilityBuckets buckets = UsabilityBuckets.split(checkResults);
+    pm.getMenu().add(0, 9, 2, "导出站点已死的源（" + buckets.siteDead.size() + " 条）");
+    pm.getMenu().add(0, 10, 3, "移除站点已死的源（" + buckets.siteDead.size() + " 条）");
+    pm.getMenu().add(0, 3, 4, "导出非HTTP书源");
+    pm.getMenu().add(0, 4, 5, "导出 CSV（可在电脑打开）");
+    pm.getMenu().add(0, 5, 6, "合并同域校验结果");
+    pm.getMenu().add(0, 6, 7, "导出优质源（评分≥70）");
+    pm.getMenu().add(0, 7, 8, "同域优化建议");
+    pm.getMenu().add(0, 8, 9, "智能优选导出（评分≥70，每域最多2个）");
     pm.setOnMenuItemClickListener(item -> {
       int id = item.getItemId();
       if (id == 1) exportByCategory("可用");
@@ -1967,10 +1973,82 @@ public class MainActivity extends AppCompatActivity {
       else if (id == 6) exportQualitySources();
       else if (id == 7) showDomainOptimization();
       else if (id == 8) exportSmartQualitySources();
+      else if (id == 9) exportDeadSiteSources();
+      else if (id == 10) removeDeadSiteSources();
       return true;
     });
     pm.show();
   }
+
+  /** 导出「站点确认不可用」的书源（DNS 失败 / 连接被拒）。 */
+  private void exportDeadSiteSources() {
+    final UsabilityBuckets b = UsabilityBuckets.split(checkResults);
+    if (b.siteDead.isEmpty()) {
+      toast("没有站点已死的书源（4xx/5xx 与超时不算死站）");
+      return;
+    }
+    final List<SourceRecord> list = new ArrayList<>();
+    for (CheckSourceResult r : b.siteDead) {
+      if (r.source != null) list.add(r.source);
+    }
+    final String stamp = todayStamp();
+    // 与 exportByCategory 一致：生成放后台线程，避免万级序列化卡 UI
+    new Thread(() -> {
+      String json = ExportPayloadBuilder.toJson(list, checkResults, stamp);
+      runOnUiThread(() -> {
+        if (state.isDestroyed()) return;
+        if (json == null) { toast("生成失败"); return; }
+        pendingSave = json;
+        createDoc.launch(ExportNaming.categoryJson("站点已死", list.size(), stamp));
+      });
+    }, "export-deadsite").start();
+  }
+
+  /** 移除「站点确认不可用」的书源，并说明为什么这些能删、那些不能。 */
+  private void removeDeadSiteSources() {
+    final UsabilityBuckets b = UsabilityBuckets.split(checkResults);
+    if (b.siteDead.isEmpty()) {
+      toast("没有站点已死的书源");
+      return;
+    }
+    final int dead = b.siteDead.size();
+    final int alive = b.siteAlive.size();
+    StringBuilder msg = new StringBuilder();
+    msg.append("将移除 ").append(dead).append(" 条「站点已死」的书源。\n\n");
+    msg.append("判定依据：DNS 解析失败或连接被拒——换代理、换 UA 都救不回来。\n");
+    if (alive > 0) {
+      msg.append("\n另有 ").append(alive)
+          .append(" 条「站点在线但规则失效」（403 反爬 / 404 路径变化 / 超时），");
+      msg.append("这些不会被移除——站点还在维护，改规则或换个时间就能用。");
+    }
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("移除站点已死的源")
+        .setMessage(msg.toString())
+        .setNegativeButton("取消", null)
+        .setPositiveButton("移除 " + dead + " 条", (d, w) -> {
+          Set<String> deadUrls = b.deadUrls();
+          if (result != null) {
+            ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, deadUrls);
+            checkResults = pruned.checkResults;
+            result = pruned.result;
+          } else {
+            List<CheckSourceResult> remain = new ArrayList<>();
+            for (CheckSourceResult r : checkResults) {
+              if (r.source == null || r.source.getUrl() == null
+                  || !deadUrls.contains(r.source.getUrl())) remain.add(r);
+            }
+            checkResults.clear();
+            checkResults.addAll(remain);
+          }
+          refreshCheckSearchFilter();
+          renderCheckStats();
+          refreshExportPreview();
+          int left = result != null ? result.getRetained().size() : 0;
+          toast("已移除 " + dead + " 条站点已死的源" + (left > 0 ? "，剩余 " + left + " 条" : ""));
+        })
+        .show();
+  }
+
 
   /** 书源健康看板：按评分排序，显示建议/统计/可导出优质源。 */
   private void showHealthDashboard() {
