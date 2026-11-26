@@ -2,6 +2,7 @@ package com.mina.yuedu.check;
 
 import com.mina.yuedu.core.TextKit;
 import com.mina.yuedu.core.UrlNormalizer;
+import com.mina.yuedu.core.V2FieldAdapter;
 import com.mina.yuedu.model.SourceRecord;
 import com.mina.yuedu.network.SystemProxy;
 import java.util.ArrayList;
@@ -208,8 +209,12 @@ public final class CheckSourceEngine {
     return r;
   }
 
-  private List<String> doCheck(SourceRecord source, CheckSourceSettings settings, SourceKind kind) {
+  private List<String> doCheck(SourceRecord rawSource, CheckSourceSettings settings, SourceKind kind) {
     List<String> bad = new ArrayList<>();
+    // v2 老格式先补成 v3 字段再校验：公开书源里 73.5% 是 v2
+    // （ruleSearchUrl / ruleFindUrl / ruleBookName），不补的话会误报
+    // 「搜索链接规则为空」，把能用的源判成规则失效。
+    SourceRecord source = V2FieldAdapter.adapt(rawSource);
     String base = null;
     try {
       // bookSourceUrl 的 #后缀是书源身份标签，不参与实际 HTTP 请求。
