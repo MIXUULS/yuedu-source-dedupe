@@ -517,24 +517,18 @@ public class MainActivity extends AppCompatActivity {
         });
       }
       @Override public void onItem(String url, String body, SourceParser.ParseResult p) {
-        // p 已在 FetchManager 解析完成，无需重复解析
+        // 归类逻辑抽到 FetchResponseClassifier（可单测），这里只做状态写入
+        FetchResponseClassifier.Result cls = FetchResponseClassifier.classify(url, body, p);
         synchronized (buckets) {
           // gen 检查必须在锁内：clearAll 会先加锁清空再自增 gen，
           // 锁外检查过的旧回调可能在清空之后进入，把刚删除的数据"复活"
           if (gen != fetchGen || discard) return;
-          if (!p.getRecords().isEmpty()) {
-            buckets.addNetwork(reorder(p.getRecords()));
-          } else {
-            String indirect = SourceParser.extractIndirectUrl(body);
-            List<String> found = new ArrayList<>();
-            if (indirect != null && !indirect.isEmpty()) found.add(indirect);
-            found.addAll(SourceParser.discoverYckJsonUrls(body, url));
-            if (found.isEmpty()) {
-              synchronized (extraInvalid) {
-                if (!p.getInvalid().isEmpty()) extraInvalid.addAll(p.getInvalid());
-                else extraInvalid.add(new InvalidSource(InvalidSource.Kind.NOT_JSON_ARRAY, url + " · 响应非书源数组"));
-              }
-            } else synchronized (discovered) { discovered.addAll(found); }
+          if (cls.hasRecords()) {
+            buckets.addNetwork(reorder(cls.parsed.getRecords()));
+          } else if (cls.hasMore()) {
+            synchronized (discovered) { discovered.addAll(cls.discovered); }
+          } else if (cls.isInvalid()) {
+            synchronized (extraInvalid) { extraInvalid.add(cls.invalid); }
           }
         }
       }

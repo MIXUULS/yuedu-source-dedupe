@@ -9,6 +9,11 @@ public final class SourceParser {
     private final List<SourceRecord> records; private final List<InvalidSource> invalid;
     ParseResult(List<SourceRecord> r, List<InvalidSource> i){ records=r; invalid=i; }
     public List<SourceRecord> getRecords(){ return records; } public List<InvalidSource> getInvalid(){ return invalid; }
+    /** 供测试与调用方构造解析结果的工厂方法。 */
+    public static ParseResult of(List<SourceRecord> records, List<InvalidSource> invalid){
+      return new ParseResult(records == null ? new ArrayList<SourceRecord>() : records,
+          invalid == null ? new ArrayList<InvalidSource>() : invalid);
+    }
   }
   private SourceParser(){}
   /** 单次解析的字符上限（约 25M 字符 ≈ 50MB UTF-8 文本 / 数万条书源）；超过直接报错而非 OOM 崩溃。 */
