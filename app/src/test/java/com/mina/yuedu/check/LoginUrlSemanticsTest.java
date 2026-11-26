@@ -68,6 +68,42 @@ public class LoginUrlSemanticsTest {
     assertFalse("注册脚本不是登录页", SourceCleaner.needsLogin(s));
   }
 
+  /**
+   * 多行 JS 脚本（真实样本：大灰狼书源的 loginUrl）。
+   *
+   * 这类值不以 function 开头，而是以"const localVersion = 3.0;"这类变量声明起头，
+   * 旧的 startsWith("function") 判据漏掉了它们。
+   */
+  @Test public void multiLineScriptIsNotLogin() {
+    String script = "const localVersion = 3.0;\n\n\nfunction login() {\n  java.startBrowser('x');\n}";
+    SourceRecord s = source("大灰狼", script);
+    assertFalse("多行脚本不是登录页", SourceCleaner.needsLogin(s));
+  }
+
+  /** if 语句开头的脚本片段。 */
+  @Test public void conditionalScriptIsNotLogin() {
+    SourceRecord s = source("曼哈漫画", "if (source.getVariable() == \"\") {\n  java.startBrowser('x');\n}");
+    assertFalse("条件脚本不是登录页", SourceCleaner.needsLogin(s));
+  }
+
+  /** var/let 声明开头的脚本。 */
+  @Test public void variableDeclarationIsNotLogin() {
+    assertFalse(SourceCleaner.needsLogin(source("A", "var token = '';\nheaders = {};")));
+    assertFalse(SourceCleaner.needsLogin(source("B", "let url = 'x';")));
+  }
+
+  /** 箭头函数表达式。 */
+  @Test public void arrowFunctionIsNotLogin() {
+    assertFalse(SourceCleaner.needsLogin(
+        source("C", "const login = () => { java.startBrowser('x'); }")));
+  }
+
+  /** 但以 http 开头的多行内容仍是地址（不能因为含换行就判脚本）。 */
+  @Test public void httpUrlWithNewlineIsStillUrl() {
+    assertTrue("以 http 开头的仍是地址",
+        SourceCleaner.needsLogin(source("D", "https://a.com/login\n")));
+  }
+
   /** 指向真实 http 登录页的仍应判为需要登录（由用户开关决定是否剔除）。 */
   @Test public void realHttpLoginUrlIsLogin() {
     assertTrue("真实登录页应被识别",

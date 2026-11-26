@@ -43,22 +43,27 @@ public final class SourceCleaner {
    * 判断 loginUrl 是否真的是一个登录地址。
    *
    * 排除真实样本里出现的几类"假登录"值，避免误剔主流书源。
+   * 样本来自 2257 条用户真实书源 + 1399 条聚合书源的统计。
    */
   static boolean looksLikeRealLoginUrl(String value) {
     if (value == null) return false;
     String t = value.trim();
     if (t.isEmpty()) return false;
 
-    // 1. JS 代码：function login(){} / java.xxx / <js>...</js>
     String lower = t.toLowerCase(java.util.Locale.ROOT);
+
+    // 1. 明确的 JS 脚本开头
     if (lower.startsWith("function") || lower.startsWith("java.")
         || lower.startsWith("<js>") || lower.contains("startbrowser")) {
       return false;
     }
 
-    // 2. JSON 配置对象：{"url": ...}
+    // 2. 多行 JS 代码：真实样本里有些 loginUrl 是整段脚本，
+    //    如 "const localVersion = 3.0;\n\n\nfunction login() {...}"
+    if (looksLikeScript(t)) return false;
+
+    // 3. JSON 配置对象：{"url": ...}
     if (t.startsWith("{") || t.startsWith("[")) {
-      // 配置里 url 为空或 "null" 字符串，说明没有真实登录页
       String inner = t.replaceAll("\\s+", "");
       if (inner.contains("\"url\":\"\"") || inner.contains("\"url\":\"null\"")
           || inner.equals("{}") || inner.equals("[]")) {
@@ -68,14 +73,39 @@ public final class SourceCleaner {
       return inner.contains("http://") || inner.contains("https://");
     }
 
-    // 3. 空函数体（已由上面 function 判断覆盖，这里兜底）
+    // 4. 空函数体
     if (t.matches("function\\s*\\w*\\s*\\([^)]*\\)\\s*\\{\\s*\\}")) return false;
 
-    // 4. 只有空白/分隔符
+    // 5. 只有空白/分隔符
     if (t.replaceAll("[\\s;,]", "").isEmpty()) return false;
 
     // 其余（http 地址、相对路径）视为可能是真登录入口
     return true;
+  }
+
+  /**
+   * 是否是脚本代码而不是 URL。
+   *
+   * 判据：出现 JS 语法特征且**不以 http(s):// 开头**。
+   * 真实样本里 "const xxx = ..." / "if (...) {" / "var x = ..." 这类都是脚本。
+   */
+  private static boolean looksLikeScript(String t) {
+    String lower = t.toLowerCase(java.util.Locale.ROOT);
+    // 以 URL 开头的一定是地址
+    if (lower.startsWith("http://") || lower.startsWith("https://")) return false;
+
+    // JS 语句特征
+    String[] markers = {
+        "const ", "var ", "let ", "if (", "if(", "try{", "try {",
+        "cache.", "java.", "result", "headers =", "source.getvariable",
+        "=>", "();", ";\n"
+    };
+    for (String m : markers) {
+      if (lower.contains(m)) return true;
+    }
+    // 多行且不含 http 地址 → 视为脚本
+    if (t.contains("\n") && !lower.contains("http")) return true;
+    return false;
   }
 
   private static String text(Object o) { return o == null ? null : String.valueOf(o); }
