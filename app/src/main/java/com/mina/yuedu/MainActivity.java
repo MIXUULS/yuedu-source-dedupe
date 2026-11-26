@@ -82,14 +82,19 @@ public class MainActivity extends AppCompatActivity {
   private FetchManager fetchManager;
   private CheckSourceEngine checkEngine;
   private boolean cleanNames, partial, onlyUsable;
-  private volatile boolean discard;
-  private boolean fetchRunning, checkRunning, checkCancelRequested;
-  private volatile boolean destroyed;
-  /** 去重轮次代际号；在后台去重线程里读取，必须 volatile 否则可能读到过期值。 */
-  private volatile int recomputeGen;
-  private volatile int fetchGen;
-  /** 校验轮次代际号：与 fetchGen 同理，让上一轮引擎的回调失效。 */
-  private volatile int checkGen;
+
+  /**
+   * 并发状态与任务代际统一收在 MainState 里。
+   *
+   * 这三类状态原本散落成 8 个字段（destroyed / fetchRunning / checkRunning /
+   * checkCancelRequested / discard / fetchGen / recomputeGen / checkGen），
+   * 它们之间有隐含约束——例如"清空时必须同时作废三条链路的代际"——
+   * 但约束只写在注释里。v3.7.1 修的 30 个缺陷里有 6 个就是这类状态踩踏。
+   *
+   * 收进 MainState 后，作废代际与查询运行状态都只有一条路径。
+   */
+  private final MainState state = new MainState();
+
   private int concurrency = 4, localFileCount, currentTab;
   /** 全局顺序号分配器：自带锁，避免"必须在 buckets 锁内调用"这条隐式约定被漏掉。 */
   private final OrderAssigner orderAssigner = new OrderAssigner();
@@ -227,10 +232,10 @@ public class MainActivity extends AppCompatActivity {
           }
           text = o.toString(StandardCharsets.UTF_8.name());
         } catch (Exception e) {
-          runOnUiThread(() -> { if (!destroyed) toast("读取设置文件失败：" + e.getMessage()); });
+          runOnUiThread(() -> { if (!state.isDestroyed()) toast("读取设置文件失败：" + e.getMessage()); });
           return;
         }
-        runOnUiThread(() -> { if (!destroyed) restoreSettings(text); });
+        runOnUiThread(() -> { if (!state.isDestroyed()) restoreSettings(text); });
       }, "config-restore").start();
     });
 
@@ -321,7 +326,7 @@ public class MainActivity extends AppCompatActivity {
   }
 
   @Override protected void onDestroy() {
-    destroyed = true;
+    state.markDestroyed();
     savePrefs(); // 记住最后输入的 URL 等状态
     // 无论正常退出还是配置变更都要停掉后台任务：任务回调绑定的是本实例，
     // 放它继续跑只会变成没人收结果的孤儿线程（白耗流量和电量）。
@@ -460,13 +465,13 @@ public class MainActivity extends AppCompatActivity {
   private void startParse() {
     // 解析会清空校验结果并重算去重：校验进行中直接放行会让两边的状态互相踩踏
     // （旧引擎结束时又把上一轮结果写回来，pendingCheckUrls / 健康数据也被旧批次污染）。
-    if (checkRunning) { toast("校验进行中，请先停止校验再解析"); return; }
+    if (state.isCheckRunning()) { toast("校验进行中，请先停止校验再解析"); return; }
     operationMode.select(mode); operationMode.start(); mode = operationMode.resultMode();
     cleanNames = switchCleanNames.isChecked();
     concurrency = Math.round(sliderConcurrency.getValue());
     savePrefs();
-    partial = false; discard = false; checkResults.clear();
-    checkGen++; // 作废可能仍在收尾的上一轮校验回调
+    partial = false; state.setDiscard(false); checkResults.clear();
+    state.invalidateCheck(); // 作废可能仍在收尾的上一轮校验回调
     refreshCheckSearchFilter();
     synchronized (buckets) { buckets.replaceNetwork(Collections.emptyList()); }
     synchronized (extraInvalid) { extraInvalid.clear(); }
@@ -481,13 +486,14 @@ public class MainActivity extends AppCompatActivity {
     // 用去重后的列表发起解析，避免同一个地址被重复请求（浪费流量与时间）
     if (!preflight.unique.isEmpty()) urls = preflight.unique;
     rememberUrls(urls);
-    final int gen = ++fetchGen; // 新一轮任务代际：旧任务的数据/收尾不再生效
+    final int gen = state.startFetch(); // 新一轮任务代际：旧任务的数据/收尾不再生效
     startFetch(urls, false, gen);
   }
 
   private void startFetch(List<String> urls, boolean followUp, final int gen) {
-    fetchRunning = true;
-    checkRunning = false;
+    state.setFetchRunning(true);
+    // 抓取期间不应有校验在跑；若上一轮校验残留了 running 标志，这里清掉
+    if (state.isCheckRunning()) state.finishCheck();
     btnStop.setEnabled(true);
     btnStop.setText("停止解析");
     updateBackgroundTask("后台解析 0 / " + urls.size());
@@ -498,7 +504,7 @@ public class MainActivity extends AppCompatActivity {
     fetchManager.start(urls, concurrency, new FetchListener() {
       @Override public void onProgress(FetchProgress p) {
         runOnUiThread(() -> {
-          if (destroyed || gen != fetchGen) return;
+          if (state.isDestroyed() || gen != state.fetchGeneration()) return;
           int total = Math.max(1, p.getTotal());
           progressBar.setProgressCompat(p.getCompleted() * 100 / total, true);
           String cur = p.getCurrentUrl();
@@ -522,7 +528,7 @@ public class MainActivity extends AppCompatActivity {
         synchronized (buckets) {
           // gen 检查必须在锁内：clearAll 会先加锁清空再自增 gen，
           // 锁外检查过的旧回调可能在清空之后进入，把刚删除的数据"复活"
-          if (gen != fetchGen || discard) return;
+          if (gen != state.fetchGeneration() || state.isDiscard()) return;
           if (cls.hasRecords()) {
             buckets.addNetwork(reorder(cls.parsed.getRecords()));
           } else if (cls.hasMore()) {
@@ -534,19 +540,19 @@ public class MainActivity extends AppCompatActivity {
       }
       @Override public void onFailure(String u, String m) {
         synchronized (extraInvalid) {
-          if (gen != fetchGen || discard) return;
+          if (gen != state.fetchGeneration() || state.isDiscard()) return;
           extraInvalid.add(new InvalidSource(InvalidSource.Kind.NETWORK_FAILURE, u + " · " + m));
         }
       }
       @Override public void onFinished(boolean cancelled, boolean keep) {
         runOnUiThread(() -> {
-          if (destroyed || gen != fetchGen) return;
-          if (discard) {
-            discard = false;
+          if (state.isDestroyed() || gen != state.fetchGeneration()) return;
+          if (state.isDiscard()) {
+            state.setDiscard(false);
             synchronized (buckets) { buckets.replaceNetwork(Collections.emptyList()); }
             synchronized (extraInvalid) { extraInvalid.clear(); }
             synchronized (discovered) { discovered.clear(); }
-            fetchRunning = false;
+            state.setFetchRunning(false);
             fetchManager = null;
             updateBackgroundTask("");
             setTaskRunning(false);
@@ -565,16 +571,16 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void stopCurrentTask() {
-    if (checkRunning) {
+    if (state.isCheckRunning()) {
       stopCheck();
       return;
     }
-    if (fetchRunning) stopParse();
+    if (state.isFetchRunning()) stopParse();
   }
 
   private void stopCheck() {
-    if (checkEngine == null || checkCancelRequested) return;
-    checkCancelRequested = true;
+    if (checkEngine == null || state.isCheckCancelRequested()) return;
+    state.requestCheckCancel();
     btnStop.setEnabled(false);
     btnStop.setText("正在停止…");
     tvStatus.setText("正在停止校验，请稍候…");
@@ -587,20 +593,19 @@ public class MainActivity extends AppCompatActivity {
       .setTitle("停止解析？")
       .setItems(new String[]{"处理已加载数据", "全部放弃", "继续解析"}, (d, w) -> {
         if (w == 0) { partial = true; fetchManager.cancel(true); }
-        else if (w == 1) { discard = true; fetchManager.cancel(false); }
+        else if (w == 1) { state.setDiscard(true); fetchManager.cancel(false); }
       }).show();
   }
 
   private void recompute(boolean isPartial) {
-    final int gen = ++recomputeGen;
+    final int gen = state.nextRecomputeGeneration();
     // 只有确实没有校验在跑时才清这两个标志：
     // 之前无条件重置会让 runCheck 的并发守卫失效，用户可以再启动第二个校验引擎，
     // 两个引擎的 onFinished 互相覆盖 checkResults，先完成的那个还会变成无法取消的残留引擎。
     if (checkEngine == null) {
-      checkRunning = false;
-      checkCancelRequested = false;
+      state.finishCheck();
     }
-    fetchRunning = false;
+    state.setFetchRunning(false);
     updateBackgroundTask("");
     List<SourceRecord> copy; synchronized (buckets) { copy = buckets.all(); }
     final int localCount = buckets.localCount();
@@ -620,10 +625,10 @@ public class MainActivity extends AppCompatActivity {
     // 每次 new Thread 会同时跑 N 份万级去重，内存和 CPU 都会被打满。
     recomputeExecutor.execute(() -> {
       // 已有更新的请求在排队，这一轮结果必然被丢弃，直接跳过省掉一次全量计算
-      if (gen != recomputeGen) return;
+      if (gen != state.recomputeGeneration()) return;
       final DedupeResult base = DedupeEngine.run(filteredCopy, m, clean);
       runOnUiThread(() -> {
-        if (destroyed || gen != recomputeGen) return; // Activity 已销毁，或已有更新的计算结果
+        if (state.isDestroyed() || gen != state.recomputeGeneration()) return; // Activity 已销毁，或已有更新的计算结果
         List<InvalidSource> all = new ArrayList<>(base.getInvalid());
         synchronized (extraInvalid) { all.addAll(extraInvalid); }
         result = new DedupeResult(filteredCopy.size(), base.getRetained(), base.getDuplicateGroups(), all);
@@ -666,7 +671,7 @@ public class MainActivity extends AppCompatActivity {
     btnCheck.setEnabled(!running);
     btnImport.setEnabled(!running && result != null && !result.getRetained().isEmpty());
     btnSave.setEnabled(!running && result != null && !result.getRetained().isEmpty());
-    btnStop.setEnabled(running && !checkCancelRequested);
+    btnStop.setEnabled(running && !state.isCheckCancelRequested());
     if (!running) btnStop.setText("停止");
     for (int i = 0; i < modeGroup.getChildCount(); i++) modeGroup.getChildAt(i).setEnabled(!running);
     switchCleanNames.setEnabled(!running);
@@ -677,18 +682,16 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void clearAll() {
-    if (fetchManager != null) { discard = true; fetchManager.cancel(false); }
+    if (fetchManager != null) { state.setDiscard(true); fetchManager.cancel(false); }
     if (checkEngine != null) { checkEngine.cancel(); checkEngine = null; }
-    fetchGen++;     // 使进行中的旧抓取回调全部失效
-    recomputeGen++; // 使在途的去重任务失效：否则它会带着清空前的快照把旧结果写回来
-    checkGen++;     // 使在途的校验回调失效
+    state.invalidateAll();
     synchronized (buckets) { buckets.clearAll(); }
     orderAssigner.reset();
     synchronized (extraInvalid) { extraInvalid.clear(); }
     synchronized (discovered) { discovered.clear(); }
     localFileCount = 0; result = null; checkResults.clear(); partial = false;
     refreshCheckSearchFilter();
-    fetchRunning = false; checkRunning = false; checkCancelRequested = false;
+    state.setFetchRunning(false); state.finishCheck();
     updateBackgroundTask("");
     // 统计卡片和导出预览也要归零，否则清空后"有效 1200 · 重复 340"还挂在屏幕上
     setStatValue(R.id.tileOriginal, 0);
@@ -727,10 +730,10 @@ public class MainActivity extends AppCompatActivity {
         // order 用占位值 0，提交时在 buckets 锁内统一分配全局顺序号。
         p = SourceParser.parseArray(o.toString(StandardCharsets.UTF_8.name()), 0);
       } catch (Exception e) {
-        runOnUiThread(() -> { if (!destroyed) toast("文件读取失败：" + e.getMessage()); });
+        runOnUiThread(() -> { if (!state.isDestroyed()) toast("文件读取失败：" + e.getMessage()); });
         return;
       }
-      runOnUiThread(() -> { if (destroyed) return; commitLocal(name, p); });
+      runOnUiThread(() -> { if (state.isDestroyed()) return; commitLocal(name, p); });
     }, "local-import").start();
   }
 
@@ -1015,12 +1018,11 @@ public class MainActivity extends AppCompatActivity {
 
   private void runCheck(CheckSourceSettings settings, java.util.List<SourceRecord> targetList) {
     // 运行守卫：解析/校验进行中时，右上角菜单的重验入口仍可点到这里，放行会并发启动第二个引擎
-    if (fetchRunning || checkRunning) { toast("已有任务在运行，请先停止再发起校验"); return; }
+    if (state.isFetchRunning() || state.isCheckRunning()) { toast("已有任务在运行，请先停止再发起校验"); return; }
     List<SourceRecord> targets = new ArrayList<>(targetList);
-    final int gen = ++checkGen; // 本轮校验代际号，旧引擎的回调据此作废
-    fetchRunning = false;
-    checkRunning = true;
-    checkCancelRequested = false;
+    final int gen = state.startCheck(); // 本轮校验代际号，旧引擎的回调据此作废
+    state.setFetchRunning(false);
+    // startCheck() 已置 running=true 与 cancel=false
     checkResults.clear();
     refreshCheckSearchFilter();
     // 删除弹窗验证码的源 + 清理需要登录的源（顺序与统计规则见 CheckTargetPreparer）
@@ -1042,7 +1044,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> engine.checkAll(finalTargets, settings, new CheckSourceEngine.Listener() {
       @Override public void onProgress(int done, int total, String currentName) {
         runOnUiThread(() -> {
-          if (destroyed || gen != checkGen) return;
+          if (state.isDestroyed() || gen != state.checkGeneration()) return;
           progressBar.setProgressCompat(done * 100 / Math.max(1, total), true);
           tvProgress.setText("正在校验书源 " + done + " / " + total);
           tvStatus.setText(currentName == null ? "" : currentName);
@@ -1054,8 +1056,8 @@ public class MainActivity extends AppCompatActivity {
         runOnUiThread(() -> {
           // 代际守卫：清空、重新解析或发起新一轮校验之后，旧引擎的收尾不能再写结果，
           // 否则会把上一批的 checkResults / 历史 / 健康数据盖回来，并提前解禁按钮。
-          if (destroyed || gen != checkGen) return;
-          boolean wasCancelled = checkCancelRequested || engine.isCancelled();
+          if (state.isDestroyed() || gen != state.checkGeneration()) return;
+          boolean wasCancelled = state.isCheckCancelRequested() || engine.isCancelled();
           checkResults = results;
           refreshCheckSearchFilter();
           if (wasCancelled) {
@@ -1070,8 +1072,7 @@ public class MainActivity extends AppCompatActivity {
           }
           persistPendingCheckUrls();
           rememberCheckHistory(results);
-          checkRunning = false;
-          checkCancelRequested = false;
+          state.finishCheck();
           if (checkEngine == engine) checkEngine = null;
           updateBackgroundTask("");
           setTaskRunning(false);
@@ -1283,7 +1284,7 @@ public class MainActivity extends AppCompatActivity {
       btnRecheck.setPadding(dp(10), dp(2), dp(10), dp(2));
       final CheckSourceResult rowResult = r;
       btnRecheck.setOnClickListener(view -> {
-        if (checkRunning) { toast("校验进行中，请先停止"); return; }
+        if (state.isCheckRunning()) { toast("校验进行中，请先停止"); return; }
         // 对话框对象在循环之后才创建，这里通过 holding 数组延迟取用
         if (holder[0] != null) holder[0].dismiss();
         recheckSingle(rowResult.source);
@@ -1558,7 +1559,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(list);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("没有可导入的数据"); return; }
         try {
           // Reading fetches this URL immediately before showing its native BatchImportDialog.
@@ -1625,7 +1626,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String j = exportJson(list);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (j == null) { toast("没有可保存的数据"); return; }
         pendingSave = j;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
@@ -1661,7 +1662,7 @@ public class MainActivity extends AppCompatActivity {
     backgroundTaskText = text == null ? "" : text;
     if (backgroundTaskChip == null) return;
     backgroundTaskChip.setText(backgroundTaskText);
-    backgroundTaskChip.setVisibility(currentTab == 1 && (fetchRunning || checkRunning) ? View.VISIBLE : View.GONE);
+    backgroundTaskChip.setVisibility(currentTab == 1 && (state.isFetchRunning() || state.isCheckRunning()) ? View.VISIBLE : View.GONE);
   }
 
   private void addYckRefreshButton() {
@@ -1753,10 +1754,10 @@ public class MainActivity extends AppCompatActivity {
     s.setDisplayZoomControls(false);
     yck.addJavascriptInterface(new YckBridge(this::collectYckUrl, this::batchCollectYckUrls), "YckDedupe");
     yckClient = new YckWebClient(new YckWebClient.Listener() {
-      public void onJsonLink(String u) { if (destroyed) return; showJsonMenu(u); }
-      public void onExternal(String u) { if (!destroyed) toast("已拦截非 YCK 页面"); }
+      public void onJsonLink(String u) { if (state.isDestroyed()) return; showJsonMenu(u); }
+      public void onExternal(String u) { if (!state.isDestroyed()) toast("已拦截非 YCK 页面"); }
       public void onLoadError(String u) {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (!yckAutoFellBack) {
           yckAutoFellBack = true;
           YckSite other = yckSite == YckSite.BACKUP ? YckSite.MAIN : YckSite.BACKUP;
@@ -1770,7 +1771,7 @@ public class MainActivity extends AppCompatActivity {
         } else toast("站点加载失败，请检查网络后重试");
       }
       public void onPageFinished(String u) {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         yckAutoFellBack = false;
         yck.getSettings().setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
         injectYckCollector();
@@ -1796,7 +1797,7 @@ public class MainActivity extends AppCompatActivity {
     final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
     runOnUiThread(() -> {
       try {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         out[0] = appendUrlIfAbsent(url) ? "added" : "duplicate";
       } finally {
         // 必须在 finally 里 countDown：中途抛异常会让 JS 线程白等满超时
@@ -1827,7 +1828,7 @@ public class MainActivity extends AppCompatActivity {
       // 一次收集几百条时会把 JS 线程和主线程一起拖住。
       final int[] added = {0};
       Runnable job = () -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         java.util.LinkedHashSet<String> existing = new java.util.LinkedHashSet<>();
         CharSequence cur = etUrls.getText();
         if (cur != null) for (String x : cur.toString().split("\\r?\\n")) if (!x.trim().isEmpty()) existing.add(x.trim());
@@ -1850,9 +1851,9 @@ public class MainActivity extends AppCompatActivity {
   }
 
   private void injectYckCollector() {
-    if (destroyed || yck == null) return;
-    yck.post(() -> { if (!destroyed && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); });
-    yck.postDelayed(() -> { if (!destroyed && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); }, 800);
+    if (state.isDestroyed() || yck == null) return;
+    yck.post(() -> { if (!state.isDestroyed() && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); });
+    yck.postDelayed(() -> { if (!state.isDestroyed() && yck != null) yck.evaluateJavascript(YckCollectorScript.source(), null); }, 800);
   }
 
   private boolean appendUrlIfAbsent(String u) {
@@ -2166,7 +2167,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(list);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("生成失败"); return; }
         pendingSave = json;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
@@ -2311,7 +2312,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(records);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("生成分享文本失败"); return; }
         ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
         cm.setPrimaryClip(ClipData.newPlainText("阅读书源", json));
@@ -2326,7 +2327,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(records);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("生成失败"); return; }
         pendingSave = json;
         String d = new SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(new Date());
@@ -2340,7 +2341,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(records);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("生成失败"); return; }
         try {
           String url = ReaderImportService.prepare(this, json, 30L * 60L * 1000L);
@@ -2379,7 +2380,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       final String json = exportJson(records);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         if (json == null) { toast("生成失败"); return; }
         if (json.length() > 2000) {
           toast("书源内容较大，二维码无法完整承载，请改用「复制文本」或「保存文件」");
@@ -2461,7 +2462,7 @@ public class MainActivity extends AppCompatActivity {
           new Thread(() -> {
             final SourceParser.ParseResult p = SourceParser.parseArray(text, 0);
             runOnUiThread(() -> {
-              if (destroyed) return;
+              if (state.isDestroyed()) return;
               if (p.getRecords().isEmpty()) { toast("未解析到有效书源：" + (p.getInvalid().isEmpty() ? "" : p.getInvalid().get(0).getDetail())); return; }
               commitLocal("剪贴板", p);
               toast("已从剪贴板导入 " + p.getRecords().size() + " 条书源");
@@ -2598,13 +2599,13 @@ public class MainActivity extends AppCompatActivity {
       String ta = readUriText(a);
       String tb = readUriText(b);
       if (ta == null || tb == null) {
-        runOnUiThread(() -> { if (!destroyed) toast("读取文件失败"); });
+        runOnUiThread(() -> { if (!state.isDestroyed()) toast("读取文件失败"); });
         return;
       }
       SourceParser.ParseResult pa = SourceParser.parseArray(ta, 0);
       SourceParser.ParseResult pb = SourceParser.parseArray(tb, 0);
       runOnUiThread(() -> {
-        if (destroyed) return;
+        if (state.isDestroyed()) return;
         showCompareResult(pa.getRecords(), pb.getRecords());
       });
     }, "compare-load").start();
@@ -2718,7 +2719,7 @@ public class MainActivity extends AppCompatActivity {
         final SourceHealthTracker loaded = new SourceHealthTracker();
         loaded.fromJsonList((java.util.List<Object>) root);
         runOnUiThread(() -> {
-          if (destroyed) return;
+          if (state.isDestroyed()) return;
           // 配置变更已接管旧实例数据时不能被磁盘旧档覆盖
           if (!healthTracker.getAll().isEmpty()) return;
           healthTracker = loaded;

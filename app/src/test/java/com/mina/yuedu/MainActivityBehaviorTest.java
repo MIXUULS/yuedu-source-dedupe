@@ -67,11 +67,6 @@ public class MainActivityBehaviorTest {
     }
   }
 
-  private static int intField(Object target, String name) {
-    Object v = field(target, name);
-    return v instanceof Number ? ((Number) v).intValue() : 0;
-  }
-
   @SuppressWarnings("unchecked")
   private static <T> T castField(Object target, String name) {
     return (T) field(target, name);
@@ -156,30 +151,36 @@ public class MainActivityBehaviorTest {
 
   // ---------- 代际守卫 ----------
 
-  /** recomputeGen 必须是 volatile 且每次 recompute 自增（否则在途任务结果会覆盖新状态）。 */
+  /** 取 Activity 内部的 MainState（重构后状态都收在这里）。 */
+  private com.mina.yuedu.core.MainState mainState() {
+    return castField(activity, "state");
+  }
+
+  /** 每次 recompute 都要递增代际（否则在途任务结果会覆盖新状态）。 */
   @Test public void recompute_incrementsGeneration() throws Exception {
-    int before = intField(activity, "recomputeGen");
+    int before = mainState().recomputeGeneration();
     java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("recompute", boolean.class);
     m.setAccessible(true);
     m.invoke(activity, false);
-    int after = intField(activity, "recomputeGen");
+    int after = mainState().recomputeGeneration();
     assertTrue("recompute 必须递增代际号，否则旧任务会写回结果", after > before);
   }
 
   /** clearAll 必须同时作废 fetch / recompute / check 三条链路的在途回调。 */
   @Test public void clearAll_invalidatesAllGenerations() throws Exception {
-    int fetchBefore = intField(activity, "fetchGen");
-    int recomputeBefore = intField(activity, "recomputeGen");
-    int checkBefore = intField(activity, "checkGen");
+    com.mina.yuedu.core.MainState s = mainState();
+    int fetchBefore = s.fetchGeneration();
+    int recomputeBefore = s.recomputeGeneration();
+    int checkBefore = s.checkGeneration();
 
     java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("clearAll");
     m.setAccessible(true);
     m.invoke(activity);
 
-    assertTrue("fetchGen 应递增", intField(activity, "fetchGen") > fetchBefore);
+    assertTrue("fetchGen 应递增", s.fetchGeneration() > fetchBefore);
     assertTrue("recomputeGen 应递增，否则清空后旧去重结果会复活",
-        intField(activity, "recomputeGen") > recomputeBefore);
-    assertTrue("checkGen 应递增", intField(activity, "checkGen") > checkBefore);
+        s.recomputeGeneration() > recomputeBefore);
+    assertTrue("checkGen 应递增", s.checkGeneration() > checkBefore);
   }
 
   /** 清空后内部数据必须真的归零。 */
@@ -205,22 +206,16 @@ public class MainActivityBehaviorTest {
 
   /** 校验进行中不允许再发起解析（否则两边状态互相踩踏）。 */
   @Test public void startParse_blockedWhileChecking() throws Exception {
-    setBoolField("checkRunning", true);
+    com.mina.yuedu.core.MainState s = mainState();
+    s.startCheck();
     try {
       java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("startParse");
       m.setAccessible(true);
       m.invoke(activity);
-      assertTrue("校验中触发的解析应被挡住，checkRunning 不应被改掉",
-          (Boolean) field(activity, "checkRunning"));
+      assertTrue("校验中触发的解析应被挡住，checkRunning 不应被改掉", s.isCheckRunning());
     } finally {
-      setBoolField("checkRunning", false);
+      s.finishCheck();
     }
-  }
-
-  private void setBoolField(String name, boolean value) throws Exception {
-    java.lang.reflect.Field f = MainActivity.class.getDeclaredField(name);
-    f.setAccessible(true);
-    f.setBoolean(activity, value);
   }
 
   // ---------- 校验历史 / 设置持久化 ----------
@@ -270,6 +265,64 @@ public class MainActivityBehaviorTest {
     android.widget.EditText et = castField(activity, "etUrls");
     String text = et.getText() == null ? "" : et.getText().toString();
     assertTrue("无关文本不应填入输入框，实际: " + text, text.trim().isEmpty());
+  }
+
+  // ---------- 去重全流程（重构未改变行为） ----------
+
+  /**
+   * 导入 → 去重 → 统计的完整链路。
+   *
+   * 这是"重构没有改变行为"最直接的证据：喂已知输入，断言去重后的分类计数。
+   * 覆盖：相同 URL 合并、不同域名各自保留、中文域名不被丢弃。
+   */
+  @Test public void recompute_producesExpectedDedupeResult() throws Exception {
+    SourceBuckets buckets = castField(activity, "buckets");
+    synchronized (buckets) {
+      buckets.addLocal(Arrays.asList(
+          source(0, "A", "https://a.com"),
+          source(1, "B", "https://a.com"),
+          source(2, "C", "https://b.com"),
+          source(3, "中文域名", "https://www.例子.com")));
+    }
+
+    java.lang.reflect.Method m = MainActivity.class.getDeclaredMethod("recompute", boolean.class);
+    m.setAccessible(true);
+    m.invoke(activity, false);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+    Thread.sleep(1500);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+
+    DedupeResult r = castField(activity, "result");
+    assertNotNull("去重应产生结果", r);
+    assertEquals("2 条 a.com 应合并为 1", 3, r.getRetained().size());
+    assertEquals("应有 1 条重复", 1, r.getDuplicateCount());
+    assertEquals("中文域名不应被判无效", 0, r.getInvalid().size());
+  }
+
+  /** 清空后在途任务不能把旧结果写回（代际守卫）。 */
+  @Test public void recompute_afterClearDoesNotReviveOldResult() throws Exception {
+    SourceBuckets buckets = castField(activity, "buckets");
+    synchronized (buckets) {
+      buckets.addLocal(Arrays.asList(
+          source(0, "A", "https://a.com"), source(1, "B", "https://b.com")));
+    }
+    java.lang.reflect.Method rec = MainActivity.class.getDeclaredMethod("recompute", boolean.class);
+    rec.setAccessible(true);
+    rec.invoke(activity, false);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+    Thread.sleep(1200);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+    assertNotNull("首次去重应有结果", castField(activity, "result"));
+
+    java.lang.reflect.Method clear = MainActivity.class.getDeclaredMethod("clearAll");
+    clear.setAccessible(true);
+    clear.invoke(activity);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+    Thread.sleep(800);
+    org.robolectric.shadows.ShadowLooper.idleMainLooper();
+
+    assertNull("清空后结果应为空，不能被在途任务写回", castField(activity, "result"));
+    assertEquals("书源应清空", 0, buckets.localCount());
   }
 
   // ---------- 辅助 ----------
