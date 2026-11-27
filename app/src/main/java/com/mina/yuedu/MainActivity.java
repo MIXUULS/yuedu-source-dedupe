@@ -83,6 +83,15 @@ public class MainActivity extends AppCompatActivity {
   private CheckSourceEngine checkEngine;
   /** 重定向探测句柄：用于 onDestroy 时取消，避免退出后还在跑网络请求。 */
   private RedirectProbe redirectProbe;
+
+  /**
+   * 会话持久化：把书源与校验结果写到应用私有目录。
+   *
+   * 现状痛点是应用被杀或重装后 2257 条书源与 25 分钟校验结果全部丢失。
+   * 只在后台线程读写，绝不阻塞 UI。
+   */
+  private java.util.concurrent.ExecutorService sessionExecutor;
+  private volatile boolean sessionRestored;
   private boolean cleanNames, partial, onlyUsable;
 
   /**
@@ -178,6 +187,15 @@ public class MainActivity extends AppCompatActivity {
     bindDedupe(dedupePage);
     restorePrefs();
 
+    sessionExecutor = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+      Thread t = new Thread(r, "session-io");
+      t.setDaemon(true);
+      return t;
+    });
+    // 配置变更（如切深色模式）时数据已由 SessionState 接管，不需要再读盘；
+    // 只有真正的冷启动（kept == null）才恢复。
+    if (kept == null) scheduleSessionRestore();
+
     yck = new WebView(this);
     yck.setVisibility(View.GONE);
     pageContainer.addView(yck, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -254,6 +272,81 @@ public class MainActivity extends AppCompatActivity {
     updateModeDesc();
     // 配置变更后把旧实例的界面状态补回来（数据已在上面接管，这里只刷新展示）
     if (kept != null) restoreSessionUi();
+  }
+
+  /** 会话文件：应用私有目录下的 session.gz。 */
+  private java.io.File sessionFile() {
+    return new java.io.File(getFilesDir(), "session.gz");
+  }
+
+  /**
+   * 冷启动时在后台读会话并恢复到界面。
+   *
+   * 读盘 2-3 MB（GZIP 压缩后）在后台线程完成，不阻塞启动。
+   * 恢复失败就当没有会话——绝不能因为会话文件坏了让应用起不来。
+   */
+  private void scheduleSessionRestore() {
+    if (sessionRestored) return;
+    sessionRestored = true;
+    final java.util.concurrent.ExecutorService ex = sessionExecutor;
+    if (ex == null) return;
+    ex.execute(() -> {
+      final SessionStore.Snapshot snap = SessionStore.load(sessionFile());
+      if (snap == null || snap.isEmpty()) return;
+      runOnUiThread(() -> {
+        if (state.isDestroyed() || isFinishing()) return;
+        applySessionSnapshot(snap);
+      });
+    });
+  }
+
+  /** 把读到的会话数据灌进内存与界面。 */
+  private void applySessionSnapshot(SessionStore.Snapshot snap) {
+    if (snap == null || snap.isEmpty()) return;
+    // 用户已经手动导入过数据就不覆盖（恢复是"锦上添花"，不能盖掉更新的输入）
+    boolean alreadyHasData;
+    synchronized (buckets) { alreadyHasData = !buckets.isEmpty(); }
+    if (alreadyHasData || result != null) return;
+
+    synchronized (buckets) { buckets.addLocal(snap.sources); }
+    localFileCount = 1;   // 让「已添加本地 JSON」那行有内容可显示
+    // 顺序号接着恢复的数据往下排，否则新导入的源会从 0 开始撞号
+    int maxOrder = 0;
+    for (SourceRecord s : snap.sources) maxOrder = Math.max(maxOrder, s.getOrder() + 1);
+    orderAssigner.set(maxOrder);
+
+    if (snap.checkResults != null && !snap.checkResults.isEmpty()) {
+      checkResults.clear();
+      checkResults.addAll(snap.checkResults);
+    }
+    // 用恢复的模式重算一次去重结果（纯计算，毫秒级）
+    recompute(false);
+    toast("已恢复上次会话：" + snap.sources.size() + " 条书源"
+        + (snap.checkResults.isEmpty() ? "" : "、" + snap.checkResults.size() + " 条校验结果"));
+  }
+
+  /**
+   * 在后台把当前会话写盘。
+   *
+   * 什么时候调用：校验结束、去重结果更新、书源变多/变少之后。
+   * 不放在 onDestroy —— 系统杀进程时 onDestroy 不保证执行，
+   * 而且那时再写盘也来不及。
+   */
+  private void persistSessionAsync() {
+    final java.util.concurrent.ExecutorService ex = sessionExecutor;
+    if (ex == null || state.isDestroyed()) return;
+
+    final List<SourceRecord> sources;
+    synchronized (buckets) {
+      sources = result != null ? new ArrayList<>(result.getRetained()) : buckets.all();
+    }
+    if (sources.isEmpty() && checkResults.isEmpty()) return;
+
+    final List<CheckSourceResult> checks = new ArrayList<>(checkResults);
+    final String modeName = mode.name();
+    final java.io.File f = sessionFile();
+
+    ex.execute(() -> SessionStore.save(f, sources, checks, modeName));
   }
 
   /** 配置变更重建后恢复界面：本地文件计数、结果卡片、统计数字、校验结果、当前 Tab。 */
@@ -339,6 +432,10 @@ public class MainActivity extends AppCompatActivity {
     // 重定向探测是纯网络等待，不取消会让线程池在 Activity 销毁后继续跑几分钟
     if (redirectProbe != null) { redirectProbe.cancel(); redirectProbe = null; }
     recomputeExecutor.shutdownNow();
+    if (sessionExecutor != null) {
+      sessionExecutor.shutdownNow();
+      sessionExecutor = null;
+    }
     // 释放 WebView：JS 桥与 Client 都持有本 Activity 的引用，不销毁会把整个视图树一起泄漏
     if (yck != null) {
       yck.stopLoading();
@@ -679,6 +776,8 @@ public class MainActivity extends AppCompatActivity {
           switchOnlyUsable.setVisibility(View.GONE);
           renderKindExportSwitches();
         }
+        // 去重结果更新后落盘（后台线程），这样冷启动能恢复到这一步
+        persistSessionAsync();
       });
     });
   }
@@ -1137,6 +1236,7 @@ public class MainActivity extends AppCompatActivity {
           // 记录书源健康数据
           healthTracker.recordBatch(finalTargets, results);
           saveHealthData();
+          persistSessionAsync();
           toast(wasCancelled ? "校验已停止，保留已完成 " + results.size() + " 条" : "校验完成");
           // 识别「失败是不是网络环境（代理/VPN）造成的」——
           // 实测同一批书源开代理后可用数从 857 掉到 626，用户会误以为是书源变差。
