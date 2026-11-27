@@ -421,6 +421,42 @@ app/src/main/java/com/mina/yuedu/
 - 空壳判定 `markEmptyShell` 默认 false，由 UI 显式开启。
 - 会话文件损坏时返回 null，绝不让应用起不来。
 
+### 7.6 Release Notes 要精简（用户明确反馈过）
+
+v3.7.4 的 Release Notes 被用户评价为「**太多太杂**」。
+
+**问题**：写了 5000+ 字，把所有改动、所有实测数据、所有实现细节都堆上去，
+像一份开发日志，不像给用户看的发布说明。
+
+**正确写法**：
+- 先说「最重要的 1-2 件事」，其他降级为短条目
+- 每条控制在 2-3 句，讲**用户能感知到什么变化**，不讲实现细节
+- 实测数据只留最有说服力的 1-2 个数字，不要贴完整表格
+- 「其它修复」用一个列表带过，每条一行
+- 结尾放安装信息（版本/大小/SHA256）+ 一句注意事项
+
+**反面例子**（v3.7.4 写的）：
+> 写了「统计卡片、导出预览、分类开关全部正常」这种开发自测内容，
+> 用户不关心；写了「GZIP 压缩 + 流式写出」这种实现细节，用户也看不懂。
+
+**正面例子**：
+> 「会话持久化 — 重启后书源和校验结果还在。GZIP 压缩 412 KB，
+> 内存增量约 0（数据本来就在内存里）。」
+
+### 7.7 发版检查清单
+
+```
+1. 改版本号（build.gradle.kts 的 versionCode + versionName）
+2. 四处版本号同步：build.gradle.kts / README / AGENTS.md / 项目工作日志
+3. ./gradlew clean testDebugUnitTest assembleDebug assembleRelease lintDebug
+4. 真机装 release 包验证（不能只测 debug）
+5. 打 tag 并推送
+6. 写 Release Notes（精简！见 7.6）
+7. 推送到 GitHub
+8. 用户在网页创建 Release 并上传 APK
+9. 下载已发布的 APK 校验 SHA256 与本地一致
+```
+
 ---
 
 ## 八、当前状态
