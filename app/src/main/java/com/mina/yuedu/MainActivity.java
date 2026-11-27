@@ -2117,7 +2117,9 @@ public class MainActivity extends AppCompatActivity {
 
     new MaterialAlertDialogBuilder(this)
         .setTitle("重定向同站检测")
-        .setView(sc)
+        // 注意：这里必须传 ll 而不是 sc——sc 已经 addView 给 ll 了，
+        // 再交给弹窗会抛 "The specified child already has a parent"。
+        .setView(ll)
         .setNegativeButton("关闭", null)
         .setPositiveButton("复制结果", (d, w) -> {
           StringBuilder sb = new StringBuilder();
@@ -2519,6 +2521,12 @@ public class MainActivity extends AppCompatActivity {
       showQrFor(records); dialog.dismiss();
     }));
     root.addView(sheetButton("📥 从剪贴板导入书源", v -> { pasteImport(); dialog.dismiss(); }));
+    // 重定向检测放在这里而不是导出菜单：它只需要"去重结果"，不需要"校验结果"，
+    // 放在导出菜单里会导致用户没跑校验就完全找不到这个功能。
+    root.addView(sheetButton("🔀 检测重定向同站（需联网）", v -> {
+      dialog.dismiss();
+      checkRedirectDuplicates();
+    }));
     return root;
   }
 
