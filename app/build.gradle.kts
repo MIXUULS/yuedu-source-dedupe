@@ -31,9 +31,11 @@ android {
         }
         create("releaseKey") {
             storeFile = file("../keystore/release.keystore")
-            storePassword = localProp("releaseStorePassword", "yuedu2026")
+            // 签名密码不写默认值：必须由 local.properties 提供（该文件在 .gitignore 中）。
+            // 之前这里把真实密码当默认值硬编码，等于把发布签名凭据提交进仓库。
+            storePassword = localProp("releaseStorePassword", "")
             keyAlias = localProp("releaseKeyAlias", "yuedu")
-            keyPassword = localProp("releaseKeyPassword", "yuedu2026")
+            keyPassword = localProp("releaseKeyPassword", "")
         }
     }
     compileOptions {
