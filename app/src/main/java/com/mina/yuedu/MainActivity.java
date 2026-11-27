@@ -92,6 +92,15 @@ public class MainActivity extends AppCompatActivity {
    */
   private java.util.concurrent.ExecutorService sessionExecutor;
   private volatile boolean sessionRestored;
+
+  /**
+   * 已处理过的启动 Intent 标识，防止同一个 Intent 被重复处理。
+   *
+   * Activity 不销毁时再次 am start / onNewIntent 会复用同一个 Intent 对象，
+   * 而 onCreate 里 getIntent() 也可能拿到上次遗留的 Intent——
+   * 不去重就会把同一个地址反复填进输入框。
+   */
+  private String handledIntentKey;
   private boolean cleanNames, partial, onlyUsable;
 
   /**
@@ -272,6 +281,107 @@ public class MainActivity extends AppCompatActivity {
     updateModeDesc();
     // 配置变更后把旧实例的界面状态补回来（数据已在上面接管，这里只刷新展示）
     if (kept != null) restoreSessionUi();
+    // 首次创建时处理外部传入的 URL（legado:// 或 ACTION_VIEW/SEND 带的地址）
+    if (savedInstanceState == null) handleLaunchIntent(getIntent());
+  }
+
+  /**
+   * 处理外部拉起时带的数据。
+   *
+   * Manifest 早已声明 {@code legado://} scheme，但 MainActivity 从不读 getIntent()——
+   * 用户在浏览器点书源链接、选择本应用后什么都不会发生，属于「声明了没实现」。
+   * 这里补上：把 URL 填进输入框（不自动去重，由用户确认后点解析）。
+   *
+   * 支持形式：
+   * <pre>
+   *   legado://import?a=https://...     （legado 官方约定）
+   *   legado://import/https://...
+   *   ACTION_VIEW  http(s)://...         （浏览器打开）
+   *   ACTION_SEND  text 里含 http 地址   （其他应用分享）
+   * </pre>
+   */
+  private void handleLaunchIntent(android.content.Intent intent) {
+    if (intent == null) return;
+    // 同一个 Intent 只处理一次：onCreate 与 onNewIntent 可能拿到同一个，
+    // 系统在应用未销毁时也可能重放上次的 Intent。
+    String key = String.valueOf(intent.getAction()) + "|" + intent.getData()
+        + "|" + intent.getStringExtra(android.content.Intent.EXTRA_TEXT);
+    if (key.equals(handledIntentKey)) {
+      return;
+    }
+    handledIntentKey = key;
+    try {
+      List<String> urls = new ArrayList<>();
+
+      Uri data = intent.getData();
+      if (data != null) {
+        String s = data.toString();
+        if (s != null && s.startsWith("legado://")) {
+          String q = data.getQueryParameter("a");
+          if (q == null) q = data.getQueryParameter("url");
+          if (q == null) q = data.getQueryParameter("import");
+          if (q != null) {
+            urls.add(q);
+          } else {
+            // legado://import/https://xxx 这种路径里带地址
+            String path = data.getPath();
+            if (path != null) {
+              int i = path.indexOf("http");
+              if (i >= 0) urls.add(path.substring(i));
+            }
+          }
+        } else if (s != null && (s.startsWith("http://") || s.startsWith("https://"))) {
+          urls.add(s);
+        }
+      }
+
+      String action = intent.getAction();
+      if (android.content.Intent.ACTION_SEND.equals(action)) {
+        String text = intent.getStringExtra(android.content.Intent.EXTRA_TEXT);
+        if (text != null) {
+          for (String part : text.split("\\s+")) {
+            if (part.startsWith("http://") || part.startsWith("https://")) urls.add(part);
+          }
+        }
+      }
+
+      if (urls.isEmpty()) {
+        return;
+      }
+      // 去重：onCreate 与 onNewIntent 可能拿到同一个 Intent（launchMode=singleTop），
+      // 不去重就会把同一个地址填两遍。
+      CharSequence cur = etUrls.getText();
+      String existing = cur == null ? "" : cur.toString();
+      java.util.Set<String> existLines = new java.util.LinkedHashSet<>();
+      for (String line : existing.split("\\r?\\n")) {
+        String t = line.trim();
+        if (!t.isEmpty()) existLines.add(t);
+      }
+      int added = 0;
+      for (String u : urls) {
+        if (existLines.add(u.trim())) added++;
+      }
+      if (added == 0) {
+        // 已经在输入框里了，不重复填也不打扰用户
+        return;
+      }
+      etUrls.setText(TextKit.join("\n", existLines));
+      etUrls.setSelection(etUrls.getText() == null ? 0 : etUrls.getText().length());
+      toast("已填入 " + added + " 个地址，点「解析网络源」开始");
+    } catch (Exception e) {
+      // 外部数据不可信，解析失败就当没传
+    }
+  }
+
+  /**
+   * 应用已在运行时再次被拉起（比如浏览器里点了另一个书源链接）。
+   *
+   * 单例模式下走这里而不是 onCreate，所以也要处理。
+   */
+  @Override protected void onNewIntent(android.content.Intent intent) {
+    super.onNewIntent(intent);
+    setIntent(intent);
+    handleLaunchIntent(intent);
   }
 
   /** 会话文件：应用私有目录下的 session.gz。 */
