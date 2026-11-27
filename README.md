@@ -205,7 +205,6 @@ releaseKeyAlias=yuedu
 |---|---|
 | [更新日志](CHANGELOG.md) | 各版本详细改动 |
 | [校验说明](docs/CHECK_SOURCE.md) | 五步校验的细节 |
-| [交接文档](docs/AI_HANDOVER.md) | 给接手开发者/AI 的完整背景 |
 
 ---
 
