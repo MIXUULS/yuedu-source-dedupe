@@ -81,6 +81,8 @@ public class MainActivity extends AppCompatActivity {
   private List<CheckSourceResult> checkResults = new ArrayList<>();
   private FetchManager fetchManager;
   private CheckSourceEngine checkEngine;
+  /** 重定向探测句柄：用于 onDestroy 时取消，避免退出后还在跑网络请求。 */
+  private RedirectProbe redirectProbe;
   private boolean cleanNames, partial, onlyUsable;
 
   /**
@@ -334,6 +336,8 @@ public class MainActivity extends AppCompatActivity {
     // 重建后 restoreSessionUi 会重新算一遍结果。
     if (fetchManager != null) fetchManager.cancel(true);
     if (checkEngine != null) checkEngine.cancel();
+    // 重定向探测是纯网络等待，不取消会让线程池在 Activity 销毁后继续跑几分钟
+    if (redirectProbe != null) { redirectProbe.cancel(); redirectProbe = null; }
     recomputeExecutor.shutdownNow();
     // 释放 WebView：JS 桥与 Client 都持有本 Activity 的引用，不销毁会把整个视图树一起泄漏
     if (yck != null) {
@@ -1963,6 +1967,7 @@ public class MainActivity extends AppCompatActivity {
     pm.getMenu().add(0, 6, 7, "导出优质源（评分≥70）");
     pm.getMenu().add(0, 7, 8, "同域优化建议");
     pm.getMenu().add(0, 8, 9, "智能优选导出（评分≥70，每域最多2个）");
+    pm.getMenu().add(0, 11, 10, "检测重定向同站（需联网）");
     pm.setOnMenuItemClickListener(item -> {
       int id = item.getItemId();
       if (id == 1) exportByCategory("可用");
@@ -1975,6 +1980,7 @@ public class MainActivity extends AppCompatActivity {
       else if (id == 8) exportSmartQualitySources();
       else if (id == 9) exportDeadSiteSources();
       else if (id == 10) removeDeadSiteSources();
+      else if (id == 11) checkRedirectDuplicates();
       return true;
     });
     pm.show();
@@ -2002,6 +2008,126 @@ public class MainActivity extends AppCompatActivity {
         createDoc.launch(ExportNaming.categoryJson("站点已死", list.size(), stamp));
       });
     }, "export-deadsite").start();
+  }
+
+  /**
+   * 检测「重定向到同一站点」的书源（Issue #1 三.2）。
+   *
+   * 这是个可选的重活：要发真实网络请求，万级书源即使 32 并发也要几分钟。
+   * 所以放在菜单里由用户主动触发，结果显示为「建议」而不自动改结果。
+   */
+  private void checkRedirectDuplicates() {
+    final List<SourceRecord> list;
+    synchronized (buckets) {
+      list = result != null ? new ArrayList<>(result.getRetained()) : buckets.all();
+    }
+    if (list.isEmpty()) { toast("没有可检测的书源"); return; }
+    if (state.isFetchRunning() || state.isCheckRunning()) {
+      toast("有任务在运行，请先停止");
+      return;
+    }
+
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("检测重定向同站")
+        .setMessage("将要向 " + list.size() + " 条书源的站点各发一次请求，"
+            + "看哪些不同域名最终重定向到同一个站点。\n\n"
+            + "· 需要联网，万级书源大约几分钟\n"
+            + "· 只读请求头不看正文，不会下载内容\n"
+            + "· 结果只作建议，不会自动改你的书源")
+        .setNegativeButton("取消", null)
+        .setPositiveButton("开始检测", (d, w) -> runRedirectProbe(list))
+        .show();
+  }
+
+  /** 执行重定向探测并在完成后展示分组建议。 */
+  private void runRedirectProbe(List<SourceRecord> list) {
+    final RedirectProbe probe = new RedirectProbe();
+    redirectProbe = probe;
+    setTaskRunning(true);
+    updateBackgroundTask("检测重定向：准备中…");
+
+    new Thread(() -> {
+      Map<String, String> resolved = probe.probeAll(list, new RedirectProbe.Listener() {
+        private long lastUi = 0;
+        @Override public void onProgress(int done, int total) {
+          long now = System.currentTimeMillis();
+          if (now - lastUi < 400) return;   // 限流，避免刷屏
+          lastUi = now;
+          runOnUiThread(() -> {
+            if (!state.isDestroyed()) {
+              updateBackgroundTask("检测重定向：" + done + "/" + total);
+            }
+          });
+        }
+        @Override public void onFinished(Map<String, String> r, boolean cancelled) {
+          // 结果在下面统一处理
+        }
+      });
+      if (state.isDestroyed()) return;
+      List<RedirectCluster.Group> groups = RedirectProbe.probeAndCluster(list, resolved);
+      runOnUiThread(() -> {
+        if (state.isDestroyed()) return;
+        redirectProbe = null;
+        setTaskRunning(false);
+        updateBackgroundTask("");
+        showRedirectGroups(groups, list.size(), probe.isCancelled());
+      });
+    }, "redirect-check").start();
+  }
+
+  /** 展示重定向分组结果。 */
+  private void showRedirectGroups(List<RedirectCluster.Group> groups, int scanned, boolean cancelled) {
+    if (groups.isEmpty()) {
+      toast(cancelled ? "已取消，未发现重定向同站" : "未发现重定向到同一站点的书源");
+      return;
+    }
+    int totalDup = 0;
+    for (RedirectCluster.Group g : groups) totalDup += g.size() - 1;
+
+    LinearLayout ll = new LinearLayout(this);
+    ll.setOrientation(LinearLayout.VERTICAL);
+    ll.setPadding(dp(20), dp(12), dp(20), dp(4));
+    TextView head = new TextView(this);
+    head.setText("扫描 " + scanned + " 条，发现 " + groups.size() + " 组重定向同站，"
+        + "可合并 " + totalDup + " 条冗余。");
+    head.setTextSize(14);
+    head.setPadding(0, 0, 0, dp(10));
+    ll.addView(head);
+
+    ScrollView sc = new ScrollView(this);
+    LinearLayout inner = new LinearLayout(this);
+    inner.setOrientation(LinearLayout.VERTICAL);
+    int shown = 0;
+    for (RedirectCluster.Group g : groups) {
+      if (shown++ >= 20) break;
+      TextView tv = new TextView(this);
+      tv.setText(RedirectCluster.describe(g));
+      tv.setTextSize(13);
+      tv.setPadding(0, dp(6), 0, dp(6));
+      inner.addView(tv);
+    }
+    if (groups.size() > 20) {
+      TextView more = new TextView(this);
+      more.setText("…另有 " + (groups.size() - 20) + " 组未显示");
+      more.setTextSize(12);
+      inner.addView(more);
+    }
+    sc.addView(inner);
+    ll.addView(sc);
+
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("重定向同站检测")
+        .setView(sc)
+        .setNegativeButton("关闭", null)
+        .setPositiveButton("复制结果", (d, w) -> {
+          StringBuilder sb = new StringBuilder();
+          sb.append("重定向同站检测结果\n\n");
+          for (RedirectCluster.Group g : groups) sb.append(RedirectCluster.describe(g)).append("\n");
+          ClipboardManager cm = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+          cm.setPrimaryClip(ClipData.newPlainText("重定向同站检测", sb.toString()));
+          toast("已复制");
+        })
+        .show();
   }
 
   /** 移除「站点确认不可用」的书源，并说明为什么这些能删、那些不能。 */
