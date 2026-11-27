@@ -1,7 +1,7 @@
 # 📚 阅读书源去重
 
 <p align="center">
-  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.3-blue.svg" alt="版本"></a>
+  <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/版本-3.7.4-blue.svg" alt="版本"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/许可证-MIT-green.svg" alt="许可证"></a>
   <a href="https://github.com/MIXUULS/yuedu-source-dedupe/releases"><img src="https://img.shields.io/badge/下载-APK-brightgreen.svg" alt="下载"></a>
   <a><img src="https://img.shields.io/badge/Android-7.0%2B-34A853.svg" alt="Android"></a>
@@ -44,12 +44,86 @@
 
 | 版本 | APK 大小 | 说明 |
 |------|----------|------|
-| 本社区版 v3.7.3 | **~2 MB** | R8 压缩，正式签名 |
+| 本社区版 v3.7.4 | **~2 MB** | R8 压缩，正式签名 |
 | 上游 v3.0.5 | ~6.8 MB | 未压缩 |
 
-当前版本：**v3.7.3**（versionCode 313）· 正式签名发布版
+当前版本：**v3.7.4**（versionCode 314）· 正式签名发布版
 
 ## 📝 更新日志
+
+### v3.7.4（2026-11-27 支持老格式书源 + 站点存活判定 + 会话持久化）
+
+本版是 Issue #1 的完整落地，基于 **2257 + 1295 条真实书源**做了验证。
+
+**兼容 legado 2.x 老格式**
+
+公开书源里 **73.5% 是 v2 老格式**（`ruleSearchUrl` / `ruleFindUrl` / `ruleBookName`），
+而应用此前只认 v3 字段，导致这些源校验时误报「搜索链接规则为空」。
+
+新增字段映射层后：
+
+```text
+适配前报"规则缺失"  1053 条（75.3%）
+适配后报"规则缺失"    78 条（5.6%）
+修复 975 条
+```
+
+修复的包括起点中文网、创世中文网、晋江文学、红袖添香、飞卢、纵横等主流站。
+
+**区分「站点已死」与「站点在线但规则失效」**
+
+原来所有非 2xx/3xx 响应都判「网站失效」，把 403 反爬、404 路径变化全当死站。
+实测 1443 个真实域名里 173 个返回 4xx/5xx（403 占 106），这些站完全能用。
+
+现在只有 **DNS 解析失败 / 连接被拒 / 无路由** 才算死站：
+
+```text
+正常可用            921 个（63.8%）
+有响应但 4xx/5xx    173 个（12.0%）← 站点在线，建议保留
+连不上               73 个（5.1%）
+DNS 解析失败         37 个（2.6%）← 真正该清理的
+```
+
+导出菜单新增「导出/移除站点已死的源」，界面也会显示死站与活站的数量对比。
+
+**空壳书源判定**
+
+搜索链路与发现链路同时无效的源判为无效（你举的「啃文书库」那类）。
+经 2257 + 1295 条真实书源验证 **0 误判**。
+
+**重定向同站检测（新增）**
+
+很多书源的域名重定向后其实是同一个站。新增检测功能（需联网，可选）：
+
+```text
+实测 2257 条 → 发现 34-36 组，可合并 65-66 条冗余
+
+bbqsk.info（7 条）    ← bbqsk.net / dingdiansk.com / ddsk.la / ddsk.org / ddsge.com
+txtshuku.info（5 条） ← liudatxt.net / txtshuku.org / liudatxt.la / liudatxt.com
+```
+
+结果支持一键合并，每组保留规则更完整、域名更短的那条。
+
+**会话持久化（新增）**
+
+此前导入 2257 条书源、跑完 25 分钟校验后，应用被杀或重装就全部归零。
+现在会自动保存到应用私有目录（GZIP 压缩，412 KB），冷启动自动恢复。
+
+> 内存影响：常驻增量约 0——数据本来就在内存里，持久化只多一份磁盘副本。
+
+**外部链接接收（新增）**
+
+Manifest 早就声明了 `legado://`，但一直没实现接收逻辑，点链接没反应。
+现在支持 `legado://import?a=<地址>`、`http(s)` 链接、其他应用分享文本。
+
+**其它修复**
+
+- 「移除选中」后重新去重，被删的源会复活 → 已同步从数据源头删除
+- loginUrl 判定：`function login(){}` 这类空脚本、`{"url":"null"}` 配置钩子
+  不再当作登录入口（真实数据挽救 70 条主流源）
+- 检测代理/VPN 造成的假失败并提示（实测开代理后可用数从 857 掉到 538）
+
+**测试**：499 项 / 49 个套件，0 失败。
 
 ### v3.7.3（2026-11-26 修复 Issue #1 反馈）
 
