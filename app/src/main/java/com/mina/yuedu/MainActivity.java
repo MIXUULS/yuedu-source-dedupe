@@ -1120,6 +1120,19 @@ public class MainActivity extends AppCompatActivity {
           healthTracker.recordBatch(finalTargets, results);
           saveHealthData();
           toast(wasCancelled ? "校验已停止，保留已完成 " + results.size() + " 条" : "校验完成");
+          // 识别「失败是不是网络环境（代理/VPN）造成的」——
+          // 实测同一批书源开代理后可用数从 857 掉到 626，用户会误以为是书源变差。
+          EnvironmentSuspicion.Verdict env = EnvironmentSuspicion.analyze(checkResults);
+          if (env.suspectedEnvironment) {
+            // 注意：这里在 runOnUiThread 的 lambda 内，this 指向 lambda，
+            // 必须写 MainActivity.this 才能拿到 Activity 作为 Context
+            new MaterialAlertDialogBuilder(MainActivity.this)
+                .setTitle("失败可能不是书源的问题")
+                .setMessage(env.advice)
+                .setNegativeButton("知道了", null)
+                .setPositiveButton("查看失败明细", (dd, ww) -> showCheckDetail())
+                .show();
+          }
         });
       }
     }), "source-check").start();
