@@ -820,10 +820,25 @@ public class MainActivity extends AppCompatActivity {
     if (btnUrlHistory != null) btnUrlHistory.setVisibility(getUrlHistory().isEmpty() ? View.GONE : View.VISIBLE);
   }
 
+  /**
+   * URL 输入框内容最多保存多少字符。
+   *
+   * SharedPreferences 是整个 XML 一次性读写，塞进几百 KB 会让每次
+   * savePrefs() 都变慢（onDestroy 也会调，退出时卡一下）。
+   * 8KB 够存几百个 URL，超出就只保留前 8KB——恢复时用户能看个大概，
+   * 但不会把 prefs 撑大。
+   */
+  private static final int MAX_SAVED_URLS_CHARS = 8 * 1024;
+
   /** 保存当前 URL 输入、模式、开关与并发数，下次打开自动恢复。 */
   private void savePrefs() {
+    CharSequence input = etUrls.getText();
+    String urls = input == null ? "" : input.toString();
+    if (urls.length() > MAX_SAVED_URLS_CHARS) {
+      urls = urls.substring(0, MAX_SAVED_URLS_CHARS);
+    }
     appPrefs().edit()
-        .putString("urls", etUrls.getText() == null ? "" : etUrls.getText().toString())
+        .putString("urls", urls)
         .putString("mode", mode.name())
         .putBoolean("clean", cleanNames)
         .putBoolean("onlyUsable", onlyUsable)
@@ -1126,7 +1141,7 @@ public class MainActivity extends AppCompatActivity {
           // 识别「失败是不是网络环境（代理/VPN）造成的」——
           // 实测同一批书源开代理后可用数从 857 掉到 626，用户会误以为是书源变差。
           EnvironmentSuspicion.Verdict env = EnvironmentSuspicion.analyze(checkResults);
-          if (env.suspectedEnvironment) {
+          if (env.suspectedEnvironment && !state.isDestroyed() && !isFinishing()) {
             // 注意：这里在 runOnUiThread 的 lambda 内，this 指向 lambda，
             // 必须写 MainActivity.this 才能拿到 Activity 作为 Context
             new MaterialAlertDialogBuilder(MainActivity.this)
@@ -1162,6 +1177,18 @@ public class MainActivity extends AppCompatActivity {
         for (int c = 0; c < Math.min(3, sorted.size()); c++) {
           if (c > 0) sb.append(" · ");
           sb.append(sorted.get(c).getKey()).append(" ").append(sorted.get(c).getValue());
+        }
+        // 关键区分：告诉用户 1390 条失败里有多少是真的站点已死。
+        // 没有这行时用户只看到"失败 1390"，会以为书源大面积失效；
+        // 实际上大部分是 403 反爬/路径变化，站点还活着。
+        UsabilityBuckets b = UsabilityBuckets.split(checkResults);
+        if (b.siteDead.size() > 0) {
+          sb.append("\n站点已死 ").append(b.siteDead.size())
+              .append(" 条（DNS 失败/连接被拒，可清理）");
+        }
+        if (b.siteAlive.size() > 0) {
+          sb.append(" · 站点在线但规则失效 ").append(b.siteAlive.size())
+              .append(" 条（403反爬/路径变化，建议保留）");
         }
         tvFailReasons.setText(sb.toString());
         tvFailReasons.setVisibility(View.VISIBLE);
@@ -2082,7 +2109,7 @@ public class MainActivity extends AppCompatActivity {
       if (state.isDestroyed()) return;
       List<RedirectCluster.Group> groups = RedirectProbe.probeAndCluster(list, resolved);
       runOnUiThread(() -> {
-        if (state.isDestroyed()) return;
+        if (state.isDestroyed() || isFinishing()) return;
         redirectProbe = null;
         setTaskRunning(false);
         updateBackgroundTask("");
@@ -2824,6 +2851,8 @@ public class MainActivity extends AppCompatActivity {
 
   /** 选择第一份：若本次选了 ≥2 份则直接对比；只选 1 份则打开第二份选择。 */
   private void readCompareFileA(java.util.List<Uri> uris) {
+    // 防御：调用方已判空，但方法自身也不该因为空列表崩（新增调用点容易漏）
+    if (uris == null || uris.isEmpty()) { toast("未选择文件"); return; }
     if (uris.size() >= 2) {
       compareUriA = uris.get(0);
       loadCompareBoth(compareUriA, uris.get(1));
@@ -2837,6 +2866,7 @@ public class MainActivity extends AppCompatActivity {
   /** 选择第二份：与已保存的第一份直接对比。 */
   private void readCompareFileB(java.util.List<Uri> uris) {
     if (compareUriA == null) { toast("请先选择第一份"); return; }
+    if (uris == null || uris.isEmpty()) { toast("未选择文件"); return; }
     loadCompareBoth(compareUriA, uris.get(0));
   }
 
