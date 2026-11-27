@@ -1428,6 +1428,8 @@ public class MainActivity extends AppCompatActivity {
     ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, urls);
     result = pruned.result;
     checkResults = new ArrayList<>(pruned.checkResults);
+    // 同步从数据源头移除：否则「重新去重」会把刚删的源全部算回来
+    synchronized (buckets) { buckets.removeByUrls(urls); }
     // 同步刷新统计卡片：否则删完书源后"有效/重复"数字还停留在删除前
     setStatValue(R.id.tileKept, result.getRetained().size());
     setStatValue(R.id.tileDup, result.getDuplicateCount());
@@ -1435,7 +1437,7 @@ public class MainActivity extends AppCompatActivity {
     renderCheckStats();
     renderKindExportSwitches();
     refreshExportPreview();
-    toast("已移除选中书源，可从「解析网络源」重新去重");
+    toast("已移除 " + pruned.removedCount + " 条书源");
     return pruned.removedCount;
   }
 
@@ -2045,7 +2047,7 @@ public class MainActivity extends AppCompatActivity {
     new Thread(() -> {
       String json = ExportPayloadBuilder.toJson(list, checkResults, stamp);
       runOnUiThread(() -> {
-        if (state.isDestroyed()) return;
+        if (state.isDestroyed() || isFinishing()) return;
         if (json == null) { toast("生成失败"); return; }
         pendingSave = json;
         createDoc.launch(ExportNaming.categoryJson("站点已死", list.size(), stamp));
@@ -2205,6 +2207,7 @@ public class MainActivity extends AppCompatActivity {
         .setNegativeButton("取消", null)
         .setPositiveButton("合并", (dd, ww) -> {
           ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, removeUrls);
+          synchronized (buckets) { buckets.removeByUrls(removeUrls); }
           checkResults = pruned.checkResults;
           if (pruned.result != null) result = pruned.result;
           refreshCheckSearchFilter();
@@ -2243,6 +2246,7 @@ public class MainActivity extends AppCompatActivity {
           // ResultPruner 会同时清理 retained / duplicateGroups / checkResults 三份数据，
           // 所以不需要再单独过滤 checkResults。
           ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, deadUrls);
+          synchronized (buckets) { buckets.removeByUrls(deadUrls); }
           checkResults = pruned.checkResults;
           if (pruned.result != null) result = pruned.result;
           refreshCheckSearchFilter();
