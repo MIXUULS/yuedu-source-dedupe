@@ -405,7 +405,10 @@ public class MainActivity extends AppCompatActivity {
       if (snap == null || snap.isEmpty()) return;
       runOnUiThread(() -> {
         if (state.isDestroyed() || isFinishing()) return;
-        applySessionSnapshot(snap);
+        try {
+          applySessionSnapshot(snap);
+        } catch (Throwable t) {
+        }
       });
     });
   }
@@ -429,8 +432,36 @@ public class MainActivity extends AppCompatActivity {
       checkResults.clear();
       checkResults.addAll(snap.checkResults);
     }
-    // 用恢复的模式重算一次去重结果（纯计算，毫秒级）
-    recompute(false);
+
+    // 直接同步算一次去重（2257 条毫秒级），不走 recompute()：
+    // recompute 是异步的且带代际守卫，冷启动时容易被后续调用抢先作废，
+    // 导致恢复"看起来没生效"。这里在主线程同步算完再刷新界面，结果确定。
+    final List<SourceRecord> all;
+    synchronized (buckets) { all = buckets.all(); }
+    DedupeResult restored = DedupeEngine.run(all, mode, cleanNames, true);
+    result = new DedupeResult(all.size(), restored.getRetained(),
+        restored.getDuplicateGroups(), restored.getInvalid());
+    partial = false;
+
+    // 刷新界面
+    cardResult.setVisibility(View.VISIBLE);
+    setStatValue(R.id.tileOriginal, result.getOriginalCount());
+    setStatValue(R.id.tileDup, result.getDuplicateCount());
+    setStatValue(R.id.tileKept, result.getRetained().size());
+    setStatValue(R.id.tileBad, result.getInvalid().size());
+    tvStats.setText(ResultSummary.format(mode, buckets.localCount(),
+        buckets.networkCount(), result, false));
+    btnImport.setEnabled(!result.getRetained().isEmpty());
+    btnSave.setEnabled(!result.getRetained().isEmpty());
+    tvLocalStatus.setVisibility(View.VISIBLE);
+    tvLocalStatus.setText("已恢复上次会话 · " + snap.sources.size() + " 条书源");
+    if (!checkResults.isEmpty()) {
+      renderCheckStats();
+      switchOnlyUsable.setVisibility(View.VISIBLE);
+    }
+    renderKindExportSwitches();
+    refreshExportPreview();
+
     toast("已恢复上次会话：" + snap.sources.size() + " 条书源"
         + (snap.checkResults.isEmpty() ? "" : "、" + snap.checkResults.size() + " 条校验结果"));
   }
