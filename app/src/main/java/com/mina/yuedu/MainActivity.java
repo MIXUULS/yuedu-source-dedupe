@@ -2164,7 +2164,7 @@ public class MainActivity extends AppCompatActivity {
         // 再交给弹窗会抛 "The specified child already has a parent"。
         .setView(ll)
         .setNegativeButton("关闭", null)
-        .setPositiveButton("复制结果", (d, w) -> {
+        .setNeutralButton("复制结果", (d, w) -> {
           StringBuilder sb = new StringBuilder();
           sb.append("重定向同站检测结果\n\n");
           for (RedirectCluster.Group g : groups) sb.append(RedirectCluster.describe(g)).append("\n");
@@ -2172,8 +2172,50 @@ public class MainActivity extends AppCompatActivity {
           cm.setPrimaryClip(ClipData.newPlainText("重定向同站检测", sb.toString()));
           toast("已复制");
         })
+        .setPositiveButton("合并冗余 " + totalDup + " 条", (d, w) -> mergeRedirectGroups(groups))
         .show();
   }
+
+  /**
+   * 按重定向分组合并冗余：每组只保留一条，其余移除。
+   *
+   * 保留策略：优先留规则更完整的（ruleToc/ruleContent 齐全的），
+   * 其次留 URL 更短的（通常是主域名而非轮换域名）。
+   */
+  private void mergeRedirectGroups(List<RedirectCluster.Group> groups) {
+    if (groups.isEmpty()) { toast("没有可合并的组"); return; }
+
+    final Set<String> removeUrls = new java.util.LinkedHashSet<>();
+    for (RedirectCluster.Group g : groups) {
+      SourceRecord keep = RedirectCluster.pickBestInGroup(g.members);
+      for (SourceRecord s : g.members) {
+        if (s == keep && s.getUrl() != null) continue;
+        if (s.getUrl() != null && !s.getUrl().equals(keep == null ? null : keep.getUrl())) {
+          removeUrls.add(s.getUrl());
+        }
+      }
+    }
+    if (removeUrls.isEmpty()) { toast("没有可移除的冗余"); return; }
+
+    new MaterialAlertDialogBuilder(this)
+        .setTitle("合并重定向同站")
+        .setMessage("将从 " + groups.size() + " 组中移除 " + removeUrls.size()
+            + " 条冗余书源，每组保留 1 条（规则更完整、域名更短的那条）。\n\n"
+            + "此操作只影响当前列表，不会改动你磁盘上的原文件。")
+        .setNegativeButton("取消", null)
+        .setPositiveButton("合并", (dd, ww) -> {
+          ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, removeUrls);
+          checkResults = pruned.checkResults;
+          if (pruned.result != null) result = pruned.result;
+          refreshCheckSearchFilter();
+          renderCheckStats();
+          refreshExportPreview();
+          if (result != null) recompute(partial);
+          toast("已移除 " + removeUrls.size() + " 条重定向冗余");
+        })
+        .show();
+  }
+
 
   /** 移除「站点确认不可用」的书源，并说明为什么这些能删、那些不能。 */
   private void removeDeadSiteSources() {
@@ -2198,24 +2240,17 @@ public class MainActivity extends AppCompatActivity {
         .setNegativeButton("取消", null)
         .setPositiveButton("移除 " + dead + " 条", (d, w) -> {
           Set<String> deadUrls = b.deadUrls();
-          if (result != null) {
-            ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, deadUrls);
-            checkResults = pruned.checkResults;
-            result = pruned.result;
-          } else {
-            List<CheckSourceResult> remain = new ArrayList<>();
-            for (CheckSourceResult r : checkResults) {
-              if (r.source == null || r.source.getUrl() == null
-                  || !deadUrls.contains(r.source.getUrl())) remain.add(r);
-            }
-            checkResults.clear();
-            checkResults.addAll(remain);
-          }
+          // ResultPruner 会同时清理 retained / duplicateGroups / checkResults 三份数据，
+          // 所以不需要再单独过滤 checkResults。
+          ResultPruner.Pruned pruned = ResultPruner.prune(result, checkResults, deadUrls);
+          checkResults = pruned.checkResults;
+          if (pruned.result != null) result = pruned.result;
           refreshCheckSearchFilter();
           renderCheckStats();
           refreshExportPreview();
-          int left = result != null ? result.getRetained().size() : 0;
-          toast("已移除 " + dead + " 条站点已死的源" + (left > 0 ? "，剩余 " + left + " 条" : ""));
+          // 剩余数取校验结果实际条数：没跑过去重时 result 为 null，不能拿它算
+          int left = checkResults.size();
+          toast("已移除 " + dead + " 条站点已死的源，剩余 " + left + " 条校验记录");
         })
         .show();
   }

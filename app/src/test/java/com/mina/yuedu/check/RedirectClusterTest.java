@@ -187,4 +187,40 @@ public class RedirectClusterTest {
     assertEquals("最大组应排前", 3, groups.get(0).size());
     assertEquals("big.com", groups.get(0).finalHost);
   }
+  // ---------- 合并时挑保留项 ----------
+
+  /** 规则更完整的应被保留。 */
+  @Test public void pickBestPrefersCompleteRules() {
+    Map<String, Object> full = new LinkedHashMap<>();
+    full.put("bookSourceName", "完整");
+    full.put("bookSourceUrl", "https://a.com");
+    full.put("ruleToc", mapOf("chapterList", "x"));
+    full.put("ruleContent", mapOf("content", "y"));
+    SourceRecord complete = new SourceRecord(0, "完整", "https://a.com", full);
+
+    Map<String, Object> bare = new LinkedHashMap<>();
+    bare.put("bookSourceName", "裸");
+    bare.put("bookSourceUrl", "https://a.com");
+    SourceRecord empty = new SourceRecord(1, "裸", "https://a.com", bare);
+
+    assertSame(complete, RedirectCluster.pickBestInGroup(Arrays.asList(empty, complete)));
+  }
+
+  /** 规则相同时，URL 更短的应优先（主域名优于轮换域名）。 */
+  @Test public void pickBestPrefersShorterUrl() {
+    SourceRecord shortUrl = src(0, "短", "https://a.com");
+    SourceRecord longUrl = src(1, "长", "https://very-long-mirror-name-example.com");
+    assertSame(shortUrl, RedirectCluster.pickBestInGroup(Arrays.asList(longUrl, shortUrl)));
+  }
+
+  @Test public void pickBestOnEmptyOrNull() {
+    assertNull(RedirectCluster.pickBestInGroup(null));
+    assertNull(RedirectCluster.pickBestInGroup(Collections.<SourceRecord>emptyList()));
+  }
+
+  private static Map<String, Object> mapOf(String k, String v) {
+    Map<String, Object> m = new LinkedHashMap<>();
+    m.put(k, v);
+    return m;
+  }
 }

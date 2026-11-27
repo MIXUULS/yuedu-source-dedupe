@@ -177,4 +177,30 @@ public final class RedirectCluster {
     }
     return sb.toString();
   }
+  /**
+   * 从一组里挑出应保留的那条。
+   *
+   * 策略：规则越完整越好（ruleToc/ruleContent/ruleBookInfo/ruleSearch 齐全），
+   * URL 越短越优先——轮换域名通常比主域名长，主域名更稳定。
+   */
+  public static SourceRecord pickBestInGroup(java.util.List<SourceRecord> members) {
+    if (members == null || members.isEmpty()) return null;
+    SourceRecord best = null;
+    int bestScore = Integer.MIN_VALUE;
+    for (SourceRecord s : members) {
+      if (s == null) continue;
+      int score = 0;
+      Map<String, Object> raw = s.getRaw();
+      if (raw != null) {
+        for (String k : new String[]{"ruleToc", "ruleContent", "ruleBookInfo", "ruleSearch"}) {
+          Object v = raw.get(k);
+          if (v instanceof Map && !((Map<?, ?>) v).isEmpty()) score += 10;
+        }
+      }
+      String u = s.getUrl();
+      if (u != null) score -= Math.min(u.length() / 10, 20);
+      if (score > bestScore) { bestScore = score; best = s; }
+    }
+    return best;
+  }
 }
