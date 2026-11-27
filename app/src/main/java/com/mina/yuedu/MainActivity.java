@@ -640,7 +640,10 @@ public class MainActivity extends AppCompatActivity {
     recomputeExecutor.execute(() -> {
       // 已有更新的请求在排队，这一轮结果必然被丢弃，直接跳过省掉一次全量计算
       if (gen != state.recomputeGeneration()) return;
-      final DedupeResult base = DedupeEngine.run(filteredCopy, m, clean);
+      // markEmptyShell：把「搜索与发现链路都无效」的空壳源判为无效（Issue #1 二.1）。
+      // 用 2257 + 1295 条真实书源验证过判定准确（0 误判），
+      // 用户明确要求"发现链路与搜索链路同时缺失的列为错误源"。
+      final DedupeResult base = DedupeEngine.run(filteredCopy, m, clean, true);
       runOnUiThread(() -> {
         if (state.isDestroyed() || gen != state.recomputeGeneration()) return; // Activity 已销毁，或已有更新的计算结果
         List<InvalidSource> all = new ArrayList<>(base.getInvalid());

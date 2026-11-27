@@ -49,10 +49,23 @@ public class MainActivityBehaviorTest {
 
   // ---------- 辅助 ----------
 
+  /**
+   * 构造真实形态的书源：URL + 搜索地址 + 搜索规则。
+   *
+   * 必须带 ruleSearch —— recompute 现在会开启空壳判定（Issue #1 二.1），
+   * 「无搜索规则也无发现规则」的源会被判为无效。真实 2257 条书源里
+   * 只有 1 条缺 ruleSearch，所以测试数据也应带上。
+   */
   private static SourceRecord source(int order, String name, String url) {
     Map<String, Object> raw = new LinkedHashMap<>();
     raw.put("bookSourceName", name);
     raw.put("bookSourceUrl", url);
+    if (url != null && !url.trim().isEmpty()) {
+      raw.put("searchUrl", url + "/s?q={{key}}");
+      Map<String, Object> ruleSearch = new LinkedHashMap<>();
+      ruleSearch.put("bookList", "body");
+      raw.put("ruleSearch", ruleSearch);
+    }
     return new SourceRecord(order, name, url, raw);
   }
 

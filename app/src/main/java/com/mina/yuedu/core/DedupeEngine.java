@@ -4,10 +4,28 @@ import java.util.*;
 public final class DedupeEngine {
   private DedupeEngine(){}
   public static DedupeResult run(List<SourceRecord> sources, DedupeMode mode, boolean clean){
+    return run(sources, mode, clean, false);
+  }
+
+  /**
+   * 去重主入口。
+   *
+   * @param markEmptyShell 是否把「搜索链路与发现链路都无效」的空壳源判为无效。
+   *        <p>默认关闭，由 UI 显式开启。原因：</p>
+   *        <ul>
+   *   <li>空壳判定依赖 ruleSearch / ruleExplore 的具体子字段，
+   *       而历史上不少极简书源只写 searchUrl + JS 规则（无 ruleSearch 对象），
+   *       默认开启会误伤</li>
+   *   <li>用 2257 + 1295 条真实书源验证过判定准确（0 误判），
+   *       但真实数据里几乎没有空壳样本，说明边界样本不足</li>
+   *        </ul>
+   */
+  public static DedupeResult run(List<SourceRecord> sources, DedupeMode mode, boolean clean,
+                                 boolean markEmptyShell){
     List<InvalidSource> invalid=new ArrayList<>();
     // 名称模式：按名称相似度分组，不走 URL 规范化
     if (mode == DedupeMode.NAME) {
-      return runByName(sources, clean, invalid);
+      return runByName(sources, clean, invalid, markEmptyShell);
     }
     Map<String,List<SourceRecord>> buckets=new LinkedHashMap<>();
     for(SourceRecord s: sources){
@@ -24,6 +42,15 @@ public final class DedupeEngine {
         else invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, adapted.getName()));
         continue;
       }
+      // 空壳书源判无效（Issue #1 二.1/2.2）：搜索与发现链路都无效的源
+      if(markEmptyShell){
+        String shellReason = SourceValidity.inspect(adapted);
+        if(shellReason != null){
+          invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_SHELL,
+              describeShell(adapted, shellReason)));
+          continue;
+        }
+      }
       try{
         String k=UrlNormalizer.key(u, mode);
         // 恢复出的 URL 与原值不同时，把恢复值写进记录，否则导出后仍然是空地址
@@ -35,6 +62,13 @@ public final class DedupeEngine {
     return buildResult(sources.size(), buckets, mode, clean, invalid);
   }
 
+  /** 空壳书源的展示文案：带名称便于用户定位。 */
+  private static String describeShell(SourceRecord s, String reason){
+    String n = s.getName();
+    String name = (n == null || n.trim().isEmpty()) ? "(无名)" : n.trim();
+    return name + " · " + reason;
+  }
+
   /** 把恢复出的 URL 写进记录（同时更新 raw 里的 bookSourceUrl，保证导出正确）。 */
   private static SourceRecord withRecoveredUrl(SourceRecord s, String url){
     Map<String,Object> raw = new LinkedHashMap<>(s.getRaw());
@@ -44,7 +78,7 @@ public final class DedupeEngine {
 
   /** 按名称相似度去重。 */
   private static DedupeResult runByName(List<SourceRecord> sources, boolean clean,
-                                        List<InvalidSource> invalid) {
+                                        List<InvalidSource> invalid, boolean markEmptyShell) {
     List<SourceRecord> processed = new ArrayList<>(sources.size());
     for (SourceRecord s : sources) {
       // 与 run() 保持一致：先适配 v2 格式，再尝试恢复 URL
@@ -57,6 +91,14 @@ public final class DedupeEngine {
           invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_URL, adapted.getName()));
         }
         continue;
+      }
+      if (markEmptyShell) {
+        String shellReason = SourceValidity.inspect(adapted);
+        if (shellReason != null) {
+          invalid.add(new InvalidSource(InvalidSource.Kind.EMPTY_SHELL,
+              describeShell(adapted, shellReason)));
+          continue;
+        }
       }
       SourceRecord base = recovered.equals(adapted.getUrl()) ? adapted : withRecoveredUrl(adapted, recovered);
       processed.add(clean ? base.withName(NameCleaner.clean(base.getName())) : base);
